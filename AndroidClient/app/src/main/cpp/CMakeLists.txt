@@ -13,10 +13,13 @@ set(OPUS_BUILD_TESTING OFF CACHE BOOL "" FORCE)
 set(OPUS_BUILD_PROGRAMS OFF CACHE BOOL "" FORCE)
 set(OPUS_FIXED_POINT ON CACHE BOOL "" FORCE)
 set(OPUS_STACK_PROTECTOR OFF CACHE BOOL "" FORCE)
-# arm64-v8a always has NEON, so skip Opus's runtime CPU-detection (RTCD) path,
-# which dispatches to a hand-written .s file that Opus's CMake build doesn't
-# actually compile, causing an undefined-symbol link error. Presuming NEON
-# routes straight to the NEON-intrinsics C code instead, which does build.
+# arm64-v8a always has NEON, so skip Opus's runtime CPU-detection (RTCD) path
+# entirely. OPUS_MAY_HAVE_NEON (default ON) is what pulls in the RTCD
+# assembly sources whose celt_pitch_xcorr_neon symbol isn't actually built by
+# this CMake config, causing an undefined-symbol link error. Turning it off
+# (and presuming NEON instead) routes straight to the NEON-intrinsics C code,
+# which does build correctly.
+set(OPUS_MAY_HAVE_NEON OFF CACHE BOOL "" FORCE)
 set(OPUS_PRESUME_NEON ON CACHE BOOL "" FORCE)
 add_subdirectory(third_party/opus opus_build)
 
