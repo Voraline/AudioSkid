@@ -8,10 +8,13 @@
 #include <thread>
 #include <vector>
 #include <mutex>
+#include <opus.h>
 
 #pragma comment(lib, "ws2_32.lib")
 #pragma comment(lib, "ole32.lib")
 #pragma comment(lib, "avrt.lib")
+
+#define FRAME_SAMPLES 960
 
 SOCKET server_socket;
 struct Client {
@@ -92,10 +95,26 @@ int main() {
     BYTE* data;
     UINT32 num_frames;
     DWORD flags;
-    short packet_buffer[240];
+    short packet_buffer[FRAME_SAMPLES];
     int packet_index = 0;
     int channels = format->nChannels;
-    
+
+    if (format->nSamplesPerSec != 48000) {
+        // Opus only accepts 8/12/16/24/48 kHz; this build doesn't resample.
+        MessageBoxA(0, "Default audio device is not running at 48kHz. AudioSkid needs a 48kHz output device.", "AudioSkid", MB_OK | MB_ICONERROR);
+        return 1;
+    }
+
+    int opus_err = 0;
+    OpusEncoder* encoder = opus_encoder_create(48000, 1, OPUS_APPLICATION_RESTRICTED_LOWDELAY, &opus_err);
+    opus_encoder_ctl(encoder, OPUS_SET_BITRATE(28000));
+    opus_encoder_ctl(encoder, OPUS_SET_COMPLEXITY(5));
+    opus_encoder_ctl(encoder, OPUS_SET_SIGNAL(OPUS_SIGNAL_MUSIC));
+    opus_encoder_ctl(encoder, OPUS_SET_PACKET_LOSS_PERC(5));
+    opus_encoder_ctl(encoder, OPUS_SET_INBAND_FEC(1));
+
+    unsigned char opus_packet[1500];
+
     while (true) {
         WaitForSingleObject(audio_event, INFINITE);
         while (true) {
@@ -116,10 +135,13 @@ int main() {
                         
                         packet_buffer[packet_index++] = (short)val;
                         
-                        if (packet_index == 240) {
-                            std::lock_guard<std::mutex> lock(client_mutex);
-                            for (auto& c : clients) {
-                                sendto(server_socket, (char*)packet_buffer, 480, 0, (sockaddr*)&c.addr, sizeof(c.addr));
+                        if (packet_index == FRAME_SAMPLES) {
+                            int encoded_bytes = opus_encode(encoder, packet_buffer, FRAME_SAMPLES, opus_packet, sizeof(opus_packet));
+                            if (encoded_bytes > 0) {
+                                std::lock_guard<std::mutex> lock(client_mutex);
+                                for (auto& c : clients) {
+                                    sendto(server_socket, (char*)opus_packet, encoded_bytes, 0, (sockaddr*)&c.addr, sizeof(c.addr));
+                                }
                             }
                             packet_index = 0;
                         }

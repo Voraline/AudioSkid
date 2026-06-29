@@ -3,6 +3,14 @@ project("audio-skid")
 
 set(CMAKE_BUILD_TYPE Release)
 
+# Vendored Opus codec, built as a static lib and linked into audio-skid.
+set(OPUS_BUILD_SHARED_LIBRARY OFF CACHE BOOL "" FORCE)
+set(OPUS_BUILD_TESTING OFF CACHE BOOL "" FORCE)
+set(OPUS_BUILD_PROGRAMS OFF CACHE BOOL "" FORCE)
+set(OPUS_FIXED_POINT ON CACHE BOOL "" FORCE)
+set(OPUS_STACK_PROTECTOR OFF CACHE BOOL "" FORCE)
+add_subdirectory(third_party/opus opus_build)
+
 add_library(audio-skid SHARED
     native-lib.cpp
 )
@@ -43,7 +51,12 @@ target_link_options(audio-skid PRIVATE
     -Wl,--build-id=none
 )
 
+target_include_directories(audio-skid PRIVATE
+    third_party/opus/include
+)
+
 target_link_libraries(audio-skid
     log
     aaudio
+    opus
 )

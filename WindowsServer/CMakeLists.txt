@@ -7,11 +7,22 @@ endif()
 
 set(CMAKE_CXX_FLAGS_RELEASE "/O2 /arch:AVX2 /fp:precise")
 
+# Vendored Opus codec, built as a static lib.
+set(OPUS_BUILD_SHARED_LIBRARY OFF CACHE BOOL "" FORCE)
+set(OPUS_BUILD_TESTING OFF CACHE BOOL "" FORCE)
+set(OPUS_BUILD_PROGRAMS OFF CACHE BOOL "" FORCE)
+add_subdirectory(third_party/opus opus_build)
+
 add_executable(AudioSkidServer main.cpp)
+
+target_include_directories(AudioSkidServer PRIVATE
+    third_party/opus/include
+)
 
 target_link_libraries(AudioSkidServer
     ws2_32
     ole32
     mmdevapi
     avrt
+    opus
 )

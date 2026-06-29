@@ -7,9 +7,12 @@
 #include <atomic>
 #include <sched.h>
 #include <cstring>
+#include <opus.h>
 
 #define BUFFER_MASK 16383
 #define BUFFER_SIZE 16384
+#define FRAME_SAMPLES 960
+#define MAX_PACKET_BYTES 1500
 
 int sock_fd = -1;
 short ring_buffer[BUFFER_SIZE];
@@ -87,31 +90,40 @@ Java_com_skid_audio_MainActivity_startAudioEngine(JNIEnv* env, jobject, jstring 
     AAudioStreamBuilder_delete(builder);
     env->ReleaseStringUTFChars(ip_str, ip);
 
-    short net_buf[240];
+    int opus_err = 0;
+    OpusDecoder* decoder = opus_decoder_create(48000, 1, &opus_err);
+
+    unsigned char net_buf[MAX_PACKET_BYTES];
+    short pcm_frame[FRAME_SAMPLES];
+
     while (true) {
-        if (recv(sock_fd, (char*)net_buf, 480, 0) == 480) {
-            int current_head = head.load(std::memory_order_relaxed);
-            int current_tail = tail.load(std::memory_order_acquire);
-            
-            int available = (current_head - current_tail) & BUFFER_MASK;
-            if (available > 2400) {
-                tail.store((current_head - 960) & BUFFER_MASK, std::memory_order_release);
-            }
+        int received = recv(sock_fd, (char*)net_buf, MAX_PACKET_BYTES, 0);
+        if (received <= 0) continue;
 
-            if (!can_play.load(std::memory_order_relaxed) && available >= 960) {
-                can_play.store(true, std::memory_order_release);
-            }
+        int decoded = opus_decode(decoder, net_buf, received, pcm_frame, FRAME_SAMPLES, 0);
+        if (decoded != FRAME_SAMPLES) continue;
 
-            int next_head = (current_head + 240) & BUFFER_MASK;
-            if (next_head >= current_head) {
-                memcpy(&ring_buffer[current_head], net_buf, 480);
-            } else {
-                int split = BUFFER_SIZE - current_head;
-                memcpy(&ring_buffer[current_head], net_buf, split * 2);
-                memcpy(&ring_buffer[0], (char*)net_buf + split * 2, (240 - split) * 2);
-            }
-            
-            head.store(next_head, std::memory_order_release);
+        int current_head = head.load(std::memory_order_relaxed);
+        int current_tail = tail.load(std::memory_order_acquire);
+
+        int available = (current_head - current_tail) & BUFFER_MASK;
+        if (available > 2400) {
+            tail.store((current_head - 960) & BUFFER_MASK, std::memory_order_release);
         }
+
+        if (!can_play.load(std::memory_order_relaxed) && available >= 960) {
+            can_play.store(true, std::memory_order_release);
+        }
+
+        int next_head = (current_head + FRAME_SAMPLES) & BUFFER_MASK;
+        if (next_head >= current_head) {
+            memcpy(&ring_buffer[current_head], pcm_frame, FRAME_SAMPLES * 2);
+        } else {
+            int split = BUFFER_SIZE - current_head;
+            memcpy(&ring_buffer[current_head], pcm_frame, split * 2);
+            memcpy(&ring_buffer[0], (char*)pcm_frame + split * 2, (FRAME_SAMPLES - split) * 2);
+        }
+
+        head.store(next_head, std::memory_order_release);
     }
 }
