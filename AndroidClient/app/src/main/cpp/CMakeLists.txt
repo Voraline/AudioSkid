@@ -8,7 +8,7 @@ add_library(audio-skid SHARED
 )
 
 target_compile_options(audio-skid PRIVATE
-    -std=c11
+    -std=c++17
     -O3
     -march=armv8.2-a+simd
     -mtune=cortex-a76
