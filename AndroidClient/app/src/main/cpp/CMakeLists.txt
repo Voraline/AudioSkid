@@ -13,6 +13,11 @@ set(OPUS_BUILD_TESTING OFF CACHE BOOL "" FORCE)
 set(OPUS_BUILD_PROGRAMS OFF CACHE BOOL "" FORCE)
 set(OPUS_FIXED_POINT ON CACHE BOOL "" FORCE)
 set(OPUS_STACK_PROTECTOR OFF CACHE BOOL "" FORCE)
+# arm64-v8a always has NEON, so skip Opus's runtime CPU-detection (RTCD) path,
+# which dispatches to a hand-written .s file that Opus's CMake build doesn't
+# actually compile, causing an undefined-symbol link error. Presuming NEON
+# routes straight to the NEON-intrinsics C code instead, which does build.
+set(OPUS_PRESUME_NEON ON CACHE BOOL "" FORCE)
 add_subdirectory(third_party/opus opus_build)
 
 add_library(audio-skid SHARED
