@@ -3,6 +3,10 @@ project("audio-skid")
 
 set(CMAKE_BUILD_TYPE Release)
 
+# Vendored Opus declares an old minimum CMake version; this keeps it
+# configurable under modern CMake without touching Opus's own files.
+set(CMAKE_POLICY_VERSION_MINIMUM 3.5)
+
 # Vendored Opus codec, built as a static lib and linked into audio-skid.
 set(OPUS_BUILD_SHARED_LIBRARY OFF CACHE BOOL "" FORCE)
 set(OPUS_BUILD_TESTING OFF CACHE BOOL "" FORCE)

@@ -1,6 +1,10 @@
 cmake_minimum_required(VERSION 3.10)
 project(AudioSkidServer)
 
+# Vendored Opus declares an old minimum CMake version; this keeps it
+# configurable under modern CMake without touching Opus's own files.
+set(CMAKE_POLICY_VERSION_MINIMUM 3.5)
+
 if(NOT MSVC)
     message(FATAL_ERROR "This project only supports MSVC.")
 endif()
