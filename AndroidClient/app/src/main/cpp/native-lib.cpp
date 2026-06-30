@@ -14,116 +14,116 @@
 #define FRAME_SAMPLES 960
 #define MAX_PACKET_BYTES 1500
 
-int sock_fd = -1;
-short ring_buffer[BUFFER_SIZE];
-std::atomic<int> head{ 0 };
-std::atomic<int> tail{ 0 };
-std::atomic<bool> can_play{ false };
+int SockFd = -1;
+short RingBuffer[BUFFER_SIZE];
+std::atomic<int> Head{ 0 };
+std::atomic<int> Tail{ 0 };
+std::atomic<bool> CanPlay{ false };
 
-aaudio_data_callback_result_t AudioCallback(AAudioStream* stream, void* user_data, void* audio_data, int32_t num_frames) {
-    if (!can_play.load(std::memory_order_acquire)) {
-        memset(audio_data, 0, num_frames * 2);
+aaudio_data_callback_result_t AudioCallback(AAudioStream* Stream, void* UserData, void* AudioData, int32_t NumFrames) {
+    if (!CanPlay.load(std::memory_order_acquire)) {
+        memset(AudioData, 0, NumFrames * 2);
         return AAUDIO_CALLBACK_RESULT_CONTINUE;
     }
 
-    short* output = (short*)audio_data;
-    int current_head = head.load(std::memory_order_acquire);
-    int current_tail = tail.load(std::memory_order_relaxed);
-    
-    int available = (current_head - current_tail) & BUFFER_MASK;
+    short* Output = (short*)AudioData;
+    int CurrentHead = Head.load(std::memory_order_acquire);
+    int CurrentTail = Tail.load(std::memory_order_relaxed);
 
-    if (available < num_frames) {
-        can_play.store(false, std::memory_order_release);
-        memset(audio_data, 0, num_frames * 2);
+    int Available = (CurrentHead - CurrentTail) & BUFFER_MASK;
+
+    if (Available < NumFrames) {
+        CanPlay.store(false, std::memory_order_release);
+        memset(AudioData, 0, NumFrames * 2);
         return AAUDIO_CALLBACK_RESULT_CONTINUE;
     }
 
-    int part1 = (current_tail + num_frames) & BUFFER_MASK;
-    if (part1 >= current_tail) {
-        memcpy(output, &ring_buffer[current_tail], num_frames * 2);
+    int Part1 = (CurrentTail + NumFrames) & BUFFER_MASK;
+    if (Part1 >= CurrentTail) {
+        memcpy(Output, &RingBuffer[CurrentTail], NumFrames * 2);
     } else {
-        int split = BUFFER_SIZE - current_tail;
-        memcpy(output, &ring_buffer[current_tail], split * 2);
-        memcpy((char*)output + split * 2, &ring_buffer[0], (num_frames - split) * 2);
+        int Split = BUFFER_SIZE - CurrentTail;
+        memcpy(Output, &RingBuffer[CurrentTail], Split * 2);
+        memcpy((char*)Output + Split * 2, &RingBuffer[0], (NumFrames - Split) * 2);
     }
 
-    tail.store(part1, std::memory_order_release);
+    Tail.store(Part1, std::memory_order_release);
     return AAUDIO_CALLBACK_RESULT_CONTINUE;
 }
 
 extern "C" JNIEXPORT void JNICALL
-Java_com_skid_audio_MainActivity_startAudioEngine(JNIEnv* env, jobject, jstring ip_str) {
-    const char* ip = env->GetStringUTFChars(ip_str, 0);
-    
-    sock_fd = socket(AF_INET, SOCK_DGRAM, 0);
-    int buf_size = 4194304;
-    int tos = 0x10;
-    setsockopt(sock_fd, SOL_SOCKET, SO_RCVBUF, (char*)&buf_size, 4);
-    setsockopt(sock_fd, IPPROTO_IP, IP_TOS, (char*)&tos, 4);
+Java_com_skid_audio_MainActivity_startAudioEngine(JNIEnv* Env, jobject, jstring IpStr) {
+    const char* Ip = Env->GetStringUTFChars(IpStr, 0);
 
-    sockaddr_in addr;
-    addr.sin_family = AF_INET;
-    addr.sin_port = htons(11000);
-    inet_pton(AF_INET, ip, &addr.sin_addr);
+    SockFd = socket(AF_INET, SOCK_DGRAM, 0);
+    int BufSize = 4194304;
+    int Tos = 0x10;
+    setsockopt(SockFd, SOL_SOCKET, SO_RCVBUF, (char*)&BufSize, 4);
+    setsockopt(SockFd, IPPROTO_IP, IP_TOS, (char*)&Tos, 4);
 
-    char ping = 1;
-    sendto(sock_fd, &ping, 1, 0, (sockaddr*)&addr, sizeof(addr));
+    sockaddr_in Addr;
+    Addr.sin_family = AF_INET;
+    Addr.sin_port = htons(11000);
+    inet_pton(AF_INET, Ip, &Addr.sin_addr);
 
-    struct sched_param param;
-    param.sched_priority = sched_get_priority_max(SCHED_FIFO);
-    sched_setscheduler(0, SCHED_FIFO, &param);
+    char Ping = 1;
+    sendto(SockFd, &Ping, 1, 0, (sockaddr*)&Addr, sizeof(Addr));
 
-    AAudioStreamBuilder* builder;
-    AAudio_createStreamBuilder(&builder);
-    AAudioStreamBuilder_setFormat(builder, AAUDIO_FORMAT_PCM_I16);
-    AAudioStreamBuilder_setChannelCount(builder, 1);
-    AAudioStreamBuilder_setSampleRate(builder, 48000);
-    AAudioStreamBuilder_setPerformanceMode(builder, AAUDIO_PERFORMANCE_MODE_LOW_LATENCY);
-    AAudioStreamBuilder_setSharingMode(builder, AAUDIO_SHARING_MODE_EXCLUSIVE);
-    AAudioStreamBuilder_setDataCallback(builder, AudioCallback, nullptr);
+    struct sched_param Param;
+    Param.sched_priority = sched_get_priority_max(SCHED_FIFO);
+    sched_setscheduler(0, SCHED_FIFO, &Param);
 
-    AAudioStream* stream;
-    AAudioStreamBuilder_openStream(builder, &stream);
-    AAudioStream_setBufferSizeInFrames(stream, AAudioStream_getFramesPerBurst(stream) * 4);
-    AAudioStream_requestStart(stream);
+    AAudioStreamBuilder* Builder;
+    AAudio_createStreamBuilder(&Builder);
+    AAudioStreamBuilder_setFormat(Builder, AAUDIO_FORMAT_PCM_I16);
+    AAudioStreamBuilder_setChannelCount(Builder, 1);
+    AAudioStreamBuilder_setSampleRate(Builder, 48000);
+    AAudioStreamBuilder_setPerformanceMode(Builder, AAUDIO_PERFORMANCE_MODE_LOW_LATENCY);
+    AAudioStreamBuilder_setSharingMode(Builder, AAUDIO_SHARING_MODE_EXCLUSIVE);
+    AAudioStreamBuilder_setDataCallback(Builder, AudioCallback, nullptr);
 
-    AAudioStreamBuilder_delete(builder);
-    env->ReleaseStringUTFChars(ip_str, ip);
+    AAudioStream* Stream;
+    AAudioStreamBuilder_openStream(Builder, &Stream);
+    AAudioStream_setBufferSizeInFrames(Stream, AAudioStream_getFramesPerBurst(Stream) * 4);
+    AAudioStream_requestStart(Stream);
 
-    int opus_err = 0;
-    OpusDecoder* decoder = opus_decoder_create(48000, 1, &opus_err);
+    AAudioStreamBuilder_delete(Builder);
+    Env->ReleaseStringUTFChars(IpStr, Ip);
 
-    unsigned char net_buf[MAX_PACKET_BYTES];
-    short pcm_frame[FRAME_SAMPLES];
+    int OpusErr = 0;
+    OpusDecoder* Decoder = opus_decoder_create(48000, 1, &OpusErr);
+
+    unsigned char NetBuf[MAX_PACKET_BYTES];
+    short PcmFrame[FRAME_SAMPLES];
 
     while (true) {
-        int received = recv(sock_fd, (char*)net_buf, MAX_PACKET_BYTES, 0);
-        if (received <= 0) continue;
+        int Received = recv(SockFd, (char*)NetBuf, MAX_PACKET_BYTES, 0);
+        if (Received <= 0) continue;
 
-        int decoded = opus_decode(decoder, net_buf, received, pcm_frame, FRAME_SAMPLES, 0);
-        if (decoded != FRAME_SAMPLES) continue;
+        int Decoded = opus_decode(Decoder, NetBuf, Received, PcmFrame, FRAME_SAMPLES, 0);
+        if (Decoded != FRAME_SAMPLES) continue;
 
-        int current_head = head.load(std::memory_order_relaxed);
-        int current_tail = tail.load(std::memory_order_acquire);
+        int CurrentHead = Head.load(std::memory_order_relaxed);
+        int CurrentTail = Tail.load(std::memory_order_acquire);
 
-        int available = (current_head - current_tail) & BUFFER_MASK;
-        if (available > 2400) {
-            tail.store((current_head - 960) & BUFFER_MASK, std::memory_order_release);
+        int Available = (CurrentHead - CurrentTail) & BUFFER_MASK;
+        if (Available > 2400) {
+            Tail.store((CurrentHead - 960) & BUFFER_MASK, std::memory_order_release);
         }
 
-        if (!can_play.load(std::memory_order_relaxed) && available >= 960) {
-            can_play.store(true, std::memory_order_release);
+        if (!CanPlay.load(std::memory_order_relaxed) && Available >= 960) {
+            CanPlay.store(true, std::memory_order_release);
         }
 
-        int next_head = (current_head + FRAME_SAMPLES) & BUFFER_MASK;
-        if (next_head >= current_head) {
-            memcpy(&ring_buffer[current_head], pcm_frame, FRAME_SAMPLES * 2);
+        int NextHead = (CurrentHead + FRAME_SAMPLES) & BUFFER_MASK;
+        if (NextHead >= CurrentHead) {
+            memcpy(&RingBuffer[CurrentHead], PcmFrame, FRAME_SAMPLES * 2);
         } else {
-            int split = BUFFER_SIZE - current_head;
-            memcpy(&ring_buffer[current_head], pcm_frame, split * 2);
-            memcpy(&ring_buffer[0], (char*)pcm_frame + split * 2, (FRAME_SAMPLES - split) * 2);
+            int Split = BUFFER_SIZE - CurrentHead;
+            memcpy(&RingBuffer[CurrentHead], PcmFrame, Split * 2);
+            memcpy(&RingBuffer[0], (char*)PcmFrame + Split * 2, (FRAME_SAMPLES - Split) * 2);
         }
 
-        head.store(next_head, std::memory_order_release);
+        Head.store(NextHead, std::memory_order_release);
     }
 }
