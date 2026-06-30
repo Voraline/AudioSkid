@@ -16,29 +16,29 @@
 
 #define FRAME_SAMPLES 960
 
-SOCKET server_socket;
+SOCKET ServerSocket;
 struct Client {
-    sockaddr_in addr;
+    sockaddr_in Addr;
 };
-std::vector<Client> clients;
-std::mutex client_mutex;
+std::vector<Client> Clients;
+std::mutex ClientMutex;
 
 void ListenerThread() {
-    char buffer;
-    sockaddr_in temp_addr;
-    int len = sizeof(temp_addr);
+    char Buffer;
+    sockaddr_in TempAddr;
+    int Len = sizeof(TempAddr);
     while (true) {
-        if (recvfrom(server_socket, &buffer, 1, 0, (sockaddr*)&temp_addr, &len) > 0) {
-            std::lock_guard<std::mutex> lock(client_mutex);
-            bool found = false;
-            for (auto& c : clients) {
-                if (c.addr.sin_addr.s_addr == temp_addr.sin_addr.s_addr && c.addr.sin_port == temp_addr.sin_port) {
-                    found = true;
+        if (recvfrom(ServerSocket, &Buffer, 1, 0, (sockaddr*)&TempAddr, &Len) > 0) {
+            std::lock_guard<std::mutex> Lock(ClientMutex);
+            bool Found = false;
+            for (auto& C : Clients) {
+                if (C.Addr.sin_addr.s_addr == TempAddr.sin_addr.s_addr && C.Addr.sin_port == TempAddr.sin_port) {
+                    Found = true;
                     break;
                 }
             }
-            if (!found) {
-                clients.push_back({ temp_addr });
+            if (!Found) {
+                Clients.push_back({ TempAddr });
             }
         }
     }
@@ -46,108 +46,146 @@ void ListenerThread() {
 
 int main() {
     SetPriorityClass(GetCurrentProcess(), REALTIME_PRIORITY_CLASS);
-    WSADATA wsa;
-    WSAStartup(MAKEWORD(2, 2), &wsa);
-    
-    server_socket = socket(AF_INET, SOCK_DGRAM, 0);
-    int buf_size = 4194304;
-    int tos = 0x10;
-    setsockopt(server_socket, SOL_SOCKET, SO_SNDBUF, (char*)&buf_size, 4);
-    setsockopt(server_socket, IPPROTO_IP, IP_TOS, (char*)&tos, 4);
-    
-    sockaddr_in addr{};
-    addr.sin_family = AF_INET;
-    addr.sin_port = htons(11000);
-    bind(server_socket, (sockaddr*)&addr, sizeof(addr));
-    
-    std::thread(ListenerThread).detach();
-    
-    CoInitialize(0);
-    IMMDeviceEnumerator* enumerator;
-    CoCreateInstance(__uuidof(MMDeviceEnumerator), 0, CLSCTX_ALL, __uuidof(IMMDeviceEnumerator), (void**)&enumerator);
-    
-    IMMDevice* device;
-    enumerator->GetDefaultAudioEndpoint(eRender, eConsole, &device);
-    
-    IAudioClient* audio_client;
-    device->Activate(__uuidof(IAudioClient), CLSCTX_ALL, 0, (void**)&audio_client);
-    
-    WAVEFORMATEX* format;
-    audio_client->GetMixFormat(&format);
-    
-    REFERENCE_TIME duration;
-    audio_client->GetDevicePeriod(&duration, 0);
-    
-    audio_client->Initialize(AUDCLNT_SHAREMODE_SHARED, AUDCLNT_STREAMFLAGS_LOOPBACK | AUDCLNT_STREAMFLAGS_EVENTCALLBACK, duration, 0, format, 0);
-    
-    HANDLE audio_event = CreateEvent(0, 0, 0, 0);
-    audio_client->SetEventHandle(audio_event);
-    
-    IAudioCaptureClient* capture_client;
-    audio_client->GetService(__uuidof(IAudioCaptureClient), (void**)&capture_client);
-    audio_client->Start();
-    
-    DWORD task_index = 0;
-    HANDLE task_handle = AvSetMmThreadCharacteristicsA("Pro Audio", &task_index);
-    AvSetMmThreadPriority(task_handle, AVRT_PRIORITY_CRITICAL);
-    
-    UINT32 packet_len;
-    BYTE* data;
-    UINT32 num_frames;
-    DWORD flags;
-    short packet_buffer[FRAME_SAMPLES];
-    int packet_index = 0;
-    int channels = format->nChannels;
+    WSADATA Wsa;
+    WSAStartup(MAKEWORD(2, 2), &Wsa);
 
-    if (format->nSamplesPerSec != 48000) {
-        // Opus only accepts 8/12/16/24/48 kHz; this build doesn't resample.
-        MessageBoxA(0, "Default audio device is not running at 48kHz. AudioSkid needs a 48kHz output device.", "AudioSkid", MB_OK | MB_ICONERROR);
+    ServerSocket = socket(AF_INET, SOCK_DGRAM, 0);
+    int BufSize = 4194304;
+    int Tos = 0x10;
+    setsockopt(ServerSocket, SOL_SOCKET, SO_SNDBUF, (char*)&BufSize, 4);
+    setsockopt(ServerSocket, IPPROTO_IP, IP_TOS, (char*)&Tos, 4);
+
+    sockaddr_in Addr{};
+    Addr.sin_family = AF_INET;
+    Addr.sin_port = htons(11000);
+    bind(ServerSocket, (sockaddr*)&Addr, sizeof(Addr));
+
+    std::thread(ListenerThread).detach();
+
+    CoInitialize(0);
+    IMMDeviceEnumerator* Enumerator;
+    CoCreateInstance(__uuidof(MMDeviceEnumerator), 0, CLSCTX_ALL, __uuidof(IMMDeviceEnumerator), (void**)&Enumerator);
+
+    IMMDevice* Device;
+    Enumerator->GetDefaultAudioEndpoint(eRender, eConsole, &Device);
+
+    IAudioClient* AudioClient;
+    Device->Activate(__uuidof(IAudioClient), CLSCTX_ALL, 0, (void**)&AudioClient);
+
+    WAVEFORMATEX* Format;
+    AudioClient->GetMixFormat(&Format);
+
+    REFERENCE_TIME Duration;
+    AudioClient->GetDevicePeriod(&Duration, 0);
+
+    AudioClient->Initialize(AUDCLNT_SHAREMODE_SHARED, AUDCLNT_STREAMFLAGS_LOOPBACK | AUDCLNT_STREAMFLAGS_EVENTCALLBACK, Duration, 0, Format, 0);
+
+    HANDLE AudioEvent = CreateEvent(0, 0, 0, 0);
+    AudioClient->SetEventHandle(AudioEvent);
+
+    IAudioCaptureClient* CaptureClient;
+    AudioClient->GetService(__uuidof(IAudioCaptureClient), (void**)&CaptureClient);
+    AudioClient->Start();
+
+    DWORD TaskIndex = 0;
+    HANDLE TaskHandle = AvSetMmThreadCharacteristicsA("Pro Audio", &TaskIndex);
+    AvSetMmThreadPriority(TaskHandle, AVRT_PRIORITY_CRITICAL);
+
+    UINT32 PacketLen;
+    BYTE* Data;
+    UINT32 NumFrames;
+    DWORD Flags;
+    short PacketBuffer[FRAME_SAMPLES];
+    int PacketIndex = 0;
+    int Channels = Format->nChannels;
+
+    UINT32 DeviceRate = Format->nSamplesPerSec;
+    bool NeedsResample = (DeviceRate != 48000);
+    double ResampleRatio = (double)DeviceRate / 48000.0;
+    double ResamplePos = 0.0;
+
+    if (NeedsResample && DeviceRate != 44100) {
+        char Msg[256];
+        sprintf_s(Msg, "Default audio device is running at %u Hz, which isn't supported. Use a 44.1kHz or 48kHz output device.", DeviceRate);
+        MessageBoxA(0, Msg, "AudioSkid", MB_OK | MB_ICONERROR);
         return 1;
     }
 
-    int opus_err = 0;
-    OpusEncoder* encoder = opus_encoder_create(48000, 1, OPUS_APPLICATION_RESTRICTED_LOWDELAY, &opus_err);
-    opus_encoder_ctl(encoder, OPUS_SET_BITRATE(28000));
-    opus_encoder_ctl(encoder, OPUS_SET_COMPLEXITY(5));
-    opus_encoder_ctl(encoder, OPUS_SET_SIGNAL(OPUS_SIGNAL_MUSIC));
-    opus_encoder_ctl(encoder, OPUS_SET_PACKET_LOSS_PERC(5));
-    opus_encoder_ctl(encoder, OPUS_SET_INBAND_FEC(1));
+    int OpusErr = 0;
+    OpusEncoder* Encoder = opus_encoder_create(48000, 1, OPUS_APPLICATION_RESTRICTED_LOWDELAY, &OpusErr);
+    opus_encoder_ctl(Encoder, OPUS_SET_BITRATE(16000));
+    opus_encoder_ctl(Encoder, OPUS_SET_VBR(1));
+    opus_encoder_ctl(Encoder, OPUS_SET_VBR_CONSTRAINT(1));
+    opus_encoder_ctl(Encoder, OPUS_SET_COMPLEXITY(5));
+    opus_encoder_ctl(Encoder, OPUS_SET_SIGNAL(OPUS_SIGNAL_MUSIC));
+    opus_encoder_ctl(Encoder, OPUS_SET_PACKET_LOSS_PERC(10));
+    opus_encoder_ctl(Encoder, OPUS_SET_INBAND_FEC(1));
 
-    unsigned char opus_packet[1500];
+    unsigned char OpusPacket[1500];
+
+    auto MixToMono = [Channels](const float* Samples, UINT32 FrameIndex) -> float {
+        float Sum = 0;
+        for (int K = 0; K < Channels; K++) {
+            Sum += Samples[FrameIndex * Channels + K];
+        }
+        return Sum / Channels;
+    };
+
+    auto PushSample = [&](float Mono) {
+        int Val = (int)(Mono * 32767.0f);
+        if (Val > 32767) Val = 32767;
+        if (Val < -32768) Val = -32768;
+
+        PacketBuffer[PacketIndex++] = (short)Val;
+
+        if (PacketIndex == FRAME_SAMPLES) {
+            int EncodedBytes = opus_encode(Encoder, PacketBuffer, FRAME_SAMPLES, OpusPacket, sizeof(OpusPacket));
+            if (EncodedBytes > 0) {
+                std::lock_guard<std::mutex> Lock(ClientMutex);
+                for (auto& C : Clients) {
+                    sendto(ServerSocket, (char*)OpusPacket, EncodedBytes, 0, (sockaddr*)&C.Addr, sizeof(C.Addr));
+                }
+            }
+            PacketIndex = 0;
+        }
+    };
+
+    float PrevMono = 0.0f;
+    bool HavePrev = false;
 
     while (true) {
-        WaitForSingleObject(audio_event, INFINITE);
+        WaitForSingleObject(AudioEvent, INFINITE);
         while (true) {
-            if (FAILED(capture_client->GetNextPacketSize(&packet_len)) || packet_len == 0) break;
-            
-            if (SUCCEEDED(capture_client->GetBuffer(&data, &num_frames, &flags, 0, 0))) {
-                if (num_frames) {
-                    float* samples = (float*)data;
-                    for (UINT32 i = 0; i < num_frames; i++) {
-                        float sum = 0;
-                        for (int k = 0; k < channels; k++) {
-                            sum += samples[i * channels + k];
+            if (FAILED(CaptureClient->GetNextPacketSize(&PacketLen)) || PacketLen == 0) break;
+
+            if (SUCCEEDED(CaptureClient->GetBuffer(&Data, &NumFrames, &Flags, 0, 0))) {
+                if (NumFrames) {
+                    float* Samples = (float*)Data;
+
+                    if (!NeedsResample) {
+                        for (UINT32 I = 0; I < NumFrames; I++) {
+                            PushSample(MixToMono(Samples, I));
                         }
-                        
-                        int val = (int)((sum / channels) * 32767.0f);
-                        if (val > 32767) val = 32767;
-                        if (val < -32768) val = -32768;
-                        
-                        packet_buffer[packet_index++] = (short)val;
-                        
-                        if (packet_index == FRAME_SAMPLES) {
-                            int encoded_bytes = opus_encode(encoder, packet_buffer, FRAME_SAMPLES, opus_packet, sizeof(opus_packet));
-                            if (encoded_bytes > 0) {
-                                std::lock_guard<std::mutex> lock(client_mutex);
-                                for (auto& c : clients) {
-                                    sendto(server_socket, (char*)opus_packet, encoded_bytes, 0, (sockaddr*)&c.addr, sizeof(c.addr));
-                                }
+                    } else {
+                        for (UINT32 I = 0; I < NumFrames; I++) {
+                            float CurMono = MixToMono(Samples, I);
+                            if (!HavePrev) {
+                                PrevMono = CurMono;
+                                HavePrev = true;
+                                continue;
                             }
-                            packet_index = 0;
+
+                            while (ResamplePos < 1.0) {
+                                float Interpolated = PrevMono + (CurMono - PrevMono) * (float)ResamplePos;
+                                PushSample(Interpolated);
+                                ResamplePos += ResampleRatio;
+                            }
+                            ResamplePos -= 1.0;
+                            PrevMono = CurMono;
                         }
                     }
                 }
-                capture_client->ReleaseBuffer(num_frames);
+                CaptureClient->ReleaseBuffer(NumFrames);
             }
         }
     }
