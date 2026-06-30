@@ -51,7 +51,7 @@ int main() {
     WSAStartup(MAKEWORD(2, 2), &Wsa);
 
     ServerSocket = socket(AF_INET, SOCK_DGRAM, 0);
-    int BufSize = 4194304;
+    int BufSize = 65536;
     int Tos = 0x10;
     setsockopt(ServerSocket, SOL_SOCKET, SO_SNDBUF, (char*)&BufSize, 4);
     setsockopt(ServerSocket, IPPROTO_IP, IP_TOS, (char*)&Tos, 4);
@@ -123,6 +123,7 @@ int main() {
     opus_encoder_ctl(Encoder, OPUS_SET_PACKET_LOSS_PERC(0));
     opus_encoder_ctl(Encoder, OPUS_SET_INBAND_FEC(1));
     opus_encoder_ctl(Encoder, OPUS_SET_DTX(1));
+    // opus_encoder_ctl(Encoder, OPUS_SET_BANDWIDTH(OPUS_BANDWIDTH_SUPERWIDEBAND));
 
     unsigned char OpusPacket[1500];
 
