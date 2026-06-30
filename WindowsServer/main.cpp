@@ -122,6 +122,7 @@ int main() {
     opus_encoder_ctl(Encoder, OPUS_SET_SIGNAL(OPUS_SIGNAL_MUSIC));
     opus_encoder_ctl(Encoder, OPUS_SET_PACKET_LOSS_PERC(10));
     opus_encoder_ctl(Encoder, OPUS_SET_INBAND_FEC(1));
+    opus_encoder_ctl(Encoder, OPUS_SET_DTX(1));
 
     unsigned char OpusPacket[1500];
 
