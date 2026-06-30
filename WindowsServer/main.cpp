@@ -115,7 +115,7 @@ int main() {
 
     int OpusErr = 0;
     OpusEncoder* Encoder = opus_encoder_create(48000, 1, OPUS_APPLICATION_RESTRICTED_LOWDELAY, &OpusErr);
-    opus_encoder_ctl(Encoder, OPUS_SET_BITRATE(16000));
+    opus_encoder_ctl(Encoder, OPUS_SET_BITRATE(48000));
     opus_encoder_ctl(Encoder, OPUS_SET_VBR(1));
     opus_encoder_ctl(Encoder, OPUS_SET_VBR_CONSTRAINT(1));
     opus_encoder_ctl(Encoder, OPUS_SET_COMPLEXITY(5));
