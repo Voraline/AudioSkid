@@ -22,6 +22,7 @@ struct Client {
 };
 std::vector<Client> Clients;
 std::mutex ClientMutex;
+std::vector<Client> ClientsSnapshot;
 
 void ListenerThread() {
     char Buffer;
@@ -97,12 +98,13 @@ int main() {
     DWORD Flags;
     short PacketBuffer[FRAME_SAMPLES];
     int PacketIndex = 0;
-    int Channels = Format->nChannels;
+    const int Channels = Format->nChannels;
+    const float InvChannels = 1.0f / (float)Channels;
 
     UINT32 DeviceRate = Format->nSamplesPerSec;
     bool NeedsResample = (DeviceRate != 48000);
-    double ResampleRatio = (double)DeviceRate / 48000.0;
-    double ResamplePos = 0.0;
+    float ResampleRatio = (float)DeviceRate / 48000.0f;
+    float ResamplePos = 0.0f;
 
     if (NeedsResample && DeviceRate != 44100) {
         char Msg[256];
@@ -123,30 +125,42 @@ int main() {
 
     unsigned char OpusPacket[1500];
 
-    auto MixToMono = [Channels](const float* Samples, UINT32 FrameIndex) -> float {
+    auto MixToMono = [Channels, InvChannels](const float* Samples, UINT32 FrameIndex) -> float {
+        const float* Base = Samples + FrameIndex * Channels;
+        if (Channels == 2) {
+            return (Base[0] + Base[1]) * 0.5f;
+        }
+        if (Channels == 1) {
+            return Base[0];
+        }
         float Sum = 0;
         for (int K = 0; K < Channels; K++) {
-            Sum += Samples[FrameIndex * Channels + K];
+            Sum += Base[K];
         }
-        return Sum / Channels;
+        return Sum * InvChannels;
+    };
+
+    auto FlushFrame = [&]() {
+        int EncodedBytes = opus_encode(Encoder, PacketBuffer, FRAME_SAMPLES, OpusPacket, sizeof(OpusPacket));
+        if (EncodedBytes > 0) {
+            ClientsSnapshot.clear();
+            {
+                std::lock_guard<std::mutex> Lock(ClientMutex);
+                ClientsSnapshot = Clients;
+            }
+            for (auto& C : ClientsSnapshot) {
+                sendto(ServerSocket, (char*)OpusPacket, EncodedBytes, 0, (sockaddr*)&C.Addr, sizeof(C.Addr));
+            }
+        }
+        PacketIndex = 0;
     };
 
     auto PushSample = [&](float Mono) {
         int Val = (int)(Mono * 32767.0f);
-        if (Val > 32767) Val = 32767;
-        if (Val < -32768) Val = -32768;
-
+        Val = Val > 32767 ? 32767 : (Val < -32768 ? -32768 : Val);
         PacketBuffer[PacketIndex++] = (short)Val;
-
         if (PacketIndex == FRAME_SAMPLES) {
-            int EncodedBytes = opus_encode(Encoder, PacketBuffer, FRAME_SAMPLES, OpusPacket, sizeof(OpusPacket));
-            if (EncodedBytes > 0) {
-                std::lock_guard<std::mutex> Lock(ClientMutex);
-                for (auto& C : Clients) {
-                    sendto(ServerSocket, (char*)OpusPacket, EncodedBytes, 0, (sockaddr*)&C.Addr, sizeof(C.Addr));
-                }
-            }
-            PacketIndex = 0;
+            FlushFrame();
         }
     };
 
@@ -160,7 +174,7 @@ int main() {
 
             if (SUCCEEDED(CaptureClient->GetBuffer(&Data, &NumFrames, &Flags, 0, 0))) {
                 if (NumFrames) {
-                    float* Samples = (float*)Data;
+                    const float* Samples = (const float*)Data;
 
                     if (!NeedsResample) {
                         for (UINT32 I = 0; I < NumFrames; I++) {
@@ -175,12 +189,12 @@ int main() {
                                 continue;
                             }
 
-                            while (ResamplePos < 1.0) {
-                                float Interpolated = PrevMono + (CurMono - PrevMono) * (float)ResamplePos;
+                            while (ResamplePos < 1.0f) {
+                                float Interpolated = PrevMono + (CurMono - PrevMono) * ResamplePos;
                                 PushSample(Interpolated);
                                 ResamplePos += ResampleRatio;
                             }
-                            ResamplePos -= 1.0;
+                            ResamplePos -= 1.0f;
                             PrevMono = CurMono;
                         }
                     }
