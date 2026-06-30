@@ -27,10 +27,10 @@ aaudio_data_callback_result_t AudioCallback(AAudioStream* Stream, void* UserData
     }
 
     short* Output = (short*)AudioData;
-    int CurrentHead = Head.load(std::memory_order_acquire);
-    int CurrentTail = Tail.load(std::memory_order_relaxed);
+    const int CurrentHead = Head.load(std::memory_order_acquire);
+    const int CurrentTail = Tail.load(std::memory_order_relaxed);
 
-    int Available = (CurrentHead - CurrentTail) & BUFFER_MASK;
+    const int Available = (CurrentHead - CurrentTail) & BUFFER_MASK;
 
     if (Available < NumFrames) {
         CanPlay.store(false, std::memory_order_release);
@@ -38,13 +38,13 @@ aaudio_data_callback_result_t AudioCallback(AAudioStream* Stream, void* UserData
         return AAUDIO_CALLBACK_RESULT_CONTINUE;
     }
 
-    int Part1 = (CurrentTail + NumFrames) & BUFFER_MASK;
+    const int Part1 = (CurrentTail + NumFrames) & BUFFER_MASK;
     if (Part1 >= CurrentTail) {
         memcpy(Output, &RingBuffer[CurrentTail], NumFrames * 2);
     } else {
-        int Split = BUFFER_SIZE - CurrentTail;
+        const int Split = BUFFER_SIZE - CurrentTail;
         memcpy(Output, &RingBuffer[CurrentTail], Split * 2);
-        memcpy((char*)Output + Split * 2, &RingBuffer[0], (NumFrames - Split) * 2);
+        memcpy(Output + Split, &RingBuffer[0], (NumFrames - Split) * 2);
     }
 
     Tail.store(Part1, std::memory_order_release);
@@ -70,8 +70,8 @@ Java_com_skid_audio_MainActivity_startAudioEngine(JNIEnv* Env, jobject, jstring 
     sendto(SockFd, &Ping, 1, 0, (sockaddr*)&Addr, sizeof(Addr));
 
     struct sched_param Param;
-    Param.sched_priority = sched_get_priority_max(SCHED_FIFO);
-    sched_setscheduler(0, SCHED_FIFO, &Param);
+    Param.sched_priority = sched_get_priority_max(SCHED_RR);
+    sched_setscheduler(0, SCHED_RR, &Param);
 
     AAudioStreamBuilder* Builder;
     AAudio_createStreamBuilder(&Builder);
@@ -97,16 +97,16 @@ Java_com_skid_audio_MainActivity_startAudioEngine(JNIEnv* Env, jobject, jstring 
     short PcmFrame[FRAME_SAMPLES];
 
     while (true) {
-        int Received = recv(SockFd, (char*)NetBuf, MAX_PACKET_BYTES, 0);
+        const int Received = recv(SockFd, (char*)NetBuf, MAX_PACKET_BYTES, 0);
         if (Received <= 0) continue;
 
-        int Decoded = opus_decode(Decoder, NetBuf, Received, PcmFrame, FRAME_SAMPLES, 0);
+        const int Decoded = opus_decode(Decoder, NetBuf, Received, PcmFrame, FRAME_SAMPLES, 0);
         if (Decoded != FRAME_SAMPLES) continue;
 
-        int CurrentHead = Head.load(std::memory_order_relaxed);
-        int CurrentTail = Tail.load(std::memory_order_acquire);
+        const int CurrentHead = Head.load(std::memory_order_relaxed);
+        const int CurrentTail = Tail.load(std::memory_order_acquire);
 
-        int Available = (CurrentHead - CurrentTail) & BUFFER_MASK;
+        const int Available = (CurrentHead - CurrentTail) & BUFFER_MASK;
         if (Available > 2400) {
             Tail.store((CurrentHead - 960) & BUFFER_MASK, std::memory_order_release);
         }
@@ -115,13 +115,13 @@ Java_com_skid_audio_MainActivity_startAudioEngine(JNIEnv* Env, jobject, jstring 
             CanPlay.store(true, std::memory_order_release);
         }
 
-        int NextHead = (CurrentHead + FRAME_SAMPLES) & BUFFER_MASK;
+        const int NextHead = (CurrentHead + FRAME_SAMPLES) & BUFFER_MASK;
         if (NextHead >= CurrentHead) {
             memcpy(&RingBuffer[CurrentHead], PcmFrame, FRAME_SAMPLES * 2);
         } else {
-            int Split = BUFFER_SIZE - CurrentHead;
+            const int Split = BUFFER_SIZE - CurrentHead;
             memcpy(&RingBuffer[CurrentHead], PcmFrame, Split * 2);
-            memcpy(&RingBuffer[0], (char*)PcmFrame + Split * 2, (FRAME_SAMPLES - Split) * 2);
+            memcpy(&RingBuffer[0], PcmFrame + Split, (FRAME_SAMPLES - Split) * 2);
         }
 
         Head.store(NextHead, std::memory_order_release);
