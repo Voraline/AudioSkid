@@ -51,7 +51,7 @@ int main() {
     WSAStartup(MAKEWORD(2, 2), &Wsa);
 
     ServerSocket = socket(AF_INET, SOCK_DGRAM, 0);
-    int BufSize = 65536;
+    int BufSize = 4194304;
     int Tos = 0x10;
     setsockopt(ServerSocket, SOL_SOCKET, SO_SNDBUF, (char*)&BufSize, 4);
     setsockopt(ServerSocket, IPPROTO_IP, IP_TOS, (char*)&Tos, 4);
