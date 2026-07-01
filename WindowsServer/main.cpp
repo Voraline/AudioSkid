@@ -118,13 +118,7 @@ int main() {
     int OpusErr = 0;
     OpusEncoder* Encoder = opus_encoder_create(48000, 1, OPUS_APPLICATION_RESTRICTED_LOWDELAY, &OpusErr);
     opus_encoder_ctl(Encoder, OPUS_SET_BITRATE(48000));
-    opus_encoder_ctl(Encoder, OPUS_SET_VBR(1));
-    opus_encoder_ctl(Encoder, OPUS_SET_VBR_CONSTRAINT(1));
-    opus_encoder_ctl(Encoder, OPUS_SET_COMPLEXITY(10));
     opus_encoder_ctl(Encoder, OPUS_SET_SIGNAL(OPUS_SIGNAL_MUSIC));
-    opus_encoder_ctl(Encoder, OPUS_SET_PACKET_LOSS_PERC(5));
-    opus_encoder_ctl(Encoder, OPUS_SET_INBAND_FEC(1));
-    opus_encoder_ctl(Encoder, OPUS_SET_DTX(1));
     // opus_encoder_ctl(Encoder, OPUS_SET_BANDWIDTH(OPUS_BANDWIDTH_SUPERWIDEBAND));
 
     unsigned char NetPacket[1502];
