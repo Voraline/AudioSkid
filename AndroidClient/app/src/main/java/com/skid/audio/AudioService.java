@@ -16,6 +16,7 @@ public class AudioService extends Service {
     }
 
     public native void StartAudioEngine(String Ip);
+    public native void StopAudioEngine();
 
     public static final String ExtraIp = "ip";
     private static final String ChannelId = "audio_skid_playback";
@@ -57,6 +58,15 @@ public class AudioService extends Service {
     @Override
     public IBinder onBind(Intent Intent) {
         return Binder;
+    }
+
+    public void Disconnect() {
+        if (EngineThreadStarted) {
+            StopAudioEngine();
+            EngineThreadStarted = false;
+        }
+        stopForeground(true);
+        stopSelf();
     }
 
     private Notification BuildNotification() {

@@ -21,6 +21,7 @@ public class MainActivity extends Activity {
     private boolean IsConnected = false;
     private EditText IpInput;
     private Button ConnectBtn;
+    private Button DisconnectBtn;
 
     private AudioService BoundService;
     private boolean IsServiceBound = false;
@@ -32,8 +33,7 @@ public class MainActivity extends Activity {
             BoundService = ((AudioService.LocalBinder) Service).GetService();
             IsServiceBound = true;
             IsConnected = true;
-            IpInput.setVisibility(View.GONE);
-            ConnectBtn.setVisibility(View.GONE);
+            SetConnectedUi(true);
         }
 
         @Override
@@ -63,8 +63,15 @@ public class MainActivity extends Activity {
         ConnectBtn.setTextColor(Color.parseColor("#39FF14"));
         ConnectBtn.setBackgroundColor(Color.parseColor("#1A1A1A"));
 
+        DisconnectBtn = new Button(this);
+        DisconnectBtn.setText("DISCONNECT");
+        DisconnectBtn.setTextColor(Color.parseColor("#FF3939"));
+        DisconnectBtn.setBackgroundColor(Color.parseColor("#1A1A1A"));
+        DisconnectBtn.setVisibility(View.GONE);
+
         Layout.addView(IpInput);
         Layout.addView(ConnectBtn);
+        Layout.addView(DisconnectBtn);
 
         setContentView(Layout);
 
@@ -84,7 +91,23 @@ public class MainActivity extends Activity {
             }
         });
 
+        DisconnectBtn.setOnClickListener(V -> {
+            if (!IsConnected) return;
+            if (BoundService != null) {
+                BoundService.Disconnect();
+            }
+            IsConnected = false;
+            SetConnectedUi(false);
+        });
+
         bindService(new Intent(this, AudioService.class), Connection, 0);
+    }
+
+    private void SetConnectedUi(boolean Connected) {
+        ConnectBtn.setEnabled(!Connected);
+        ConnectBtn.setAlpha(Connected ? 0.5f : 1f);
+        DisconnectBtn.setVisibility(Connected ? View.VISIBLE : View.GONE);
+        IpInput.setEnabled(!Connected);
     }
 
     @Override

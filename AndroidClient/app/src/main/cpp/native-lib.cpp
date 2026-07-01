@@ -25,6 +25,8 @@ std::atomic<int> Head{ 0 };
 std::atomic<int> Tail{ 0 };
 std::atomic<bool> CanPlay{ false };
 std::atomic<bool> EngineStarted{ false };
+std::atomic<bool> EngineRunning{ false };
+AAudioStream* ActiveStream = nullptr;
 
 aaudio_data_callback_result_t AudioCallback(AAudioStream* Stream, void* UserData, void* AudioData, int32_t NumFrames) {
     if (!CanPlay.load(std::memory_order_acquire)) {
@@ -88,6 +90,7 @@ Java_com_skid_audio_AudioService_StartAudioEngine(JNIEnv* Env, jobject, jstring 
     if (!EngineStarted.compare_exchange_strong(Expected, true, std::memory_order_acq_rel)) {
         return;
     }
+    EngineRunning.store(true, std::memory_order_release);
 
     const char* Ip = Env->GetStringUTFChars(IpStr, 0);
 
@@ -122,6 +125,7 @@ Java_com_skid_audio_AudioService_StartAudioEngine(JNIEnv* Env, jobject, jstring 
     AAudioStreamBuilder_openStream(Builder, &Stream);
     AAudioStream_setBufferSizeInFrames(Stream, AAudioStream_getFramesPerBurst(Stream) * 4);
     AAudioStream_requestStart(Stream);
+    ActiveStream = Stream;
 
     AAudioStreamBuilder_delete(Builder);
     Env->ReleaseStringUTFChars(IpStr, Ip);
@@ -135,8 +139,9 @@ Java_com_skid_audio_AudioService_StartAudioEngine(JNIEnv* Env, jobject, jstring 
     bool HaveExpectedSeq = false;
     uint16_t ExpectedSeq = 0;
 
-    while (true) {
+    while (EngineRunning.load(std::memory_order_acquire)) {
         const int Received = recv(SockFd, (char*)NetBuf, MAX_PACKET_BYTES, 0);
+        if (!EngineRunning.load(std::memory_order_acquire)) break;
         if (Received <= 2) continue;
 
         uint16_t NetSeq;
@@ -171,5 +176,28 @@ Java_com_skid_audio_AudioService_StartAudioEngine(JNIEnv* Env, jobject, jstring 
         if (Decoded == FRAME_SAMPLES) {
             PushFrame(PcmFrame);
         }
+    }
+
+    if (ActiveStream != nullptr) {
+        AAudioStream_requestStop(ActiveStream);
+        AAudioStream_close(ActiveStream);
+        ActiveStream = nullptr;
+    }
+    opus_decoder_destroy(Decoder);
+    if (SockFd >= 0) {
+        close(SockFd);
+        SockFd = -1;
+    }
+    CanPlay.store(false, std::memory_order_release);
+    Head.store(0, std::memory_order_release);
+    Tail.store(0, std::memory_order_release);
+    EngineStarted.store(false, std::memory_order_release);
+}
+
+extern "C" JNIEXPORT void JNICALL
+Java_com_skid_audio_AudioService_StopAudioEngine(JNIEnv*, jobject) {
+    EngineRunning.store(false, std::memory_order_release);
+    if (SockFd >= 0) {
+        shutdown(SockFd, SHUT_RDWR);
     }
 }
