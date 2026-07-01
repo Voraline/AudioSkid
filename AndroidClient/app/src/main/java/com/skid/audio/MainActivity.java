@@ -5,6 +5,7 @@ import android.content.Context;
 import android.graphics.Canvas;
 import android.graphics.Color;
 import android.graphics.Paint;
+import android.graphics.Path;
 import android.os.Bundle;
 import android.view.Gravity;
 import android.view.View;
@@ -24,41 +25,89 @@ public class MainActivity extends Activity {
     private boolean IsConnected = false;
     private SpectrumView SpectrumViewInstance;
 
+    private static final float MinFreq = 20.0f;
+    private static final float MaxFreq = 20000.0f;
+    private static final float MinDb = 0.0f;
+    private static final float MaxDb = 100.0f;
+    private static final float BinHz = 48000.0f / 1024.0f;
+    private static final float LogMin = (float) Math.log10(MinFreq);
+    private static final float LogMax = (float) Math.log10(MaxFreq);
+    private static final float[] GridFreqs = { 31.25f, 62.5f, 125f, 250f, 500f, 1000f, 2000f, 4000f, 8000f, 16000f };
+
     private class SpectrumView extends View {
-        private final Paint BarPaint;
+        private final Paint LinePaint;
+        private final Paint GridPaint;
+        private final Paint TextPaint;
         private final Paint BgPaint;
-        private final float[] Smoothed;
+        private final Path LinePath;
 
         SpectrumView(Context Ctx) {
             super(Ctx);
-            BarPaint = new Paint();
-            BarPaint.setColor(Color.parseColor("#00E5FF"));
+            LinePaint = new Paint();
+            LinePaint.setColor(Color.parseColor("#39FF14"));
+            LinePaint.setStyle(Paint.Style.STROKE);
+            LinePaint.setStrokeWidth(3.0f);
+            LinePaint.setAntiAlias(true);
+
+            GridPaint = new Paint();
+            GridPaint.setColor(Color.parseColor("#2A2A2A"));
+            GridPaint.setStrokeWidth(1.0f);
+
+            TextPaint = new Paint();
+            TextPaint.setColor(Color.parseColor("#808080"));
+            TextPaint.setTextSize(20.0f);
+            TextPaint.setAntiAlias(true);
+
             BgPaint = new Paint();
-            BgPaint.setColor(Color.parseColor("#101010"));
-            Smoothed = new float[32];
+            BgPaint.setColor(Color.BLACK);
+
+            LinePath = new Path();
+        }
+
+        private float FreqToX(float Freq, int Width) {
+            float LogF = (float) Math.log10(Freq);
+            return (LogF - LogMin) / (LogMax - LogMin) * Width;
         }
 
         @Override
         protected void onDraw(Canvas Cv) {
             super.onDraw(Cv);
-            int W = getWidth();
-            int H = getHeight();
-            Cv.drawRect(0, 0, W, H, BgPaint);
+            int Width = getWidth();
+            int Height = getHeight();
+            Cv.drawRect(0, 0, Width, Height, BgPaint);
+
+            for (float Freq : GridFreqs) {
+                float X = FreqToX(Freq, Width);
+                Cv.drawLine(X, 0, X, Height, GridPaint);
+                String Label = Freq >= 1000 ? ((int) (Freq / 1000)) + "k" : ((int) Freq) + "";
+                Cv.drawText(Label, X + 4, Height - 6, TextPaint);
+            }
 
             if (!IsConnected) return;
 
             float[] Bins = GetSpectrum();
-            int Count = Bins.length;
-            float BarW = W / (float) Count;
+            LinePath.reset();
+            boolean Started = false;
 
-            for (int I = 0; I < Count; I++) {
-                float Target = Math.min(1.0f, Bins[I] * 6.0f);
-                Smoothed[I] = Smoothed[I] * 0.7f + Target * 0.3f;
-                float BarH = Smoothed[I] * H;
-                float Left = I * BarW;
-                Cv.drawRect(Left, H - BarH, Left + BarW - 4, H, BarPaint);
+            for (int I = 1; I < Bins.length; I++) {
+                float Freq = I * BinHz;
+                if (Freq < MinFreq) continue;
+                if (Freq > MaxFreq) break;
+
+                float X = FreqToX(Freq, Width);
+                float Norm = (Bins[I] - MinDb) / (MaxDb - MinDb);
+                Norm = Math.max(0.0f, Math.min(1.0f, Norm));
+                float Y = Height - Norm * Height;
+
+                if (!Started) {
+                    LinePath.moveTo(X, Y);
+                    Started = true;
+                } else {
+                    LinePath.lineTo(X, Y);
+                }
             }
 
+            Cv.drawPath(LinePath, LinePaint);
             postInvalidateOnAnimation();
         }
     }
@@ -86,7 +135,7 @@ public class MainActivity extends Activity {
 
         SpectrumViewInstance = new SpectrumView(this);
         LinearLayout.LayoutParams SpectrumParams = new LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.MATCH_PARENT, 400);
+                LinearLayout.LayoutParams.MATCH_PARENT, 500);
         SpectrumParams.topMargin = 60;
 
         Layout.addView(Title);

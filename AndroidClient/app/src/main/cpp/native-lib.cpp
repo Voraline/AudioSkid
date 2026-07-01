@@ -15,8 +15,8 @@
 #define BUFFER_SIZE 16384
 #define FRAME_SAMPLES 960
 #define MAX_PACKET_BYTES 1500
-#define FFT_SIZE 64
-#define SPECTRUM_BINS 32
+#define FFT_SIZE 1024
+#define SPECTRUM_BINS 512
 
 int SockFd = -1;
 short RingBuffer[BUFFER_SIZE];
@@ -29,6 +29,13 @@ std::atomic<bool> SpectrumLock{ false };
 float FftReal[FFT_SIZE];
 float FftImag[FFT_SIZE];
 float SpectrumBins[SPECTRUM_BINS];
+float HannWindow[FFT_SIZE];
+
+void InitWindow() {
+    for (int I = 0; I < FFT_SIZE; I++) {
+        HannWindow[I] = 0.5f - 0.5f * cosf(2.0f * (float)M_PI * I / (FFT_SIZE - 1));
+    }
+}
 
 void ComputeFft() {
     for (int I = 1, J = 0; I < FFT_SIZE; I++) {
@@ -70,8 +77,7 @@ void UpdateSpectrum() {
     for (int I = 0; I < FFT_SIZE; I++) {
         int Index = (CurrentHead - FFT_SIZE + I) & BUFFER_MASK;
         float Sample = RingBuffer[Index] / 32768.0f;
-        float Window = 0.5f - 0.5f * cosf(2.0f * (float)M_PI * I / (FFT_SIZE - 1));
-        FftReal[I] = Sample * Window;
+        FftReal[I] = Sample * HannWindow[I];
         FftImag[I] = 0.0f;
     }
 
@@ -81,7 +87,8 @@ void UpdateSpectrum() {
     if (SpectrumLock.compare_exchange_strong(Expected, true, std::memory_order_acquire)) {
         for (int I = 0; I < SPECTRUM_BINS; I++) {
             float Magnitude = sqrtf(FftReal[I] * FftReal[I] + FftImag[I] * FftImag[I]) / FFT_SIZE;
-            SpectrumBins[I] = SpectrumBins[I] * 0.6f + Magnitude * 0.4f;
+            float Db = 20.0f * log10f(Magnitude + 1e-9f) + 90.0f;
+            SpectrumBins[I] = SpectrumBins[I] * 0.6f + Db * 0.4f;
         }
         SpectrumLock.store(false, std::memory_order_release);
     }
@@ -124,6 +131,8 @@ Java_com_skid_audio_MainActivity_StartAudioEngine(JNIEnv* Env, jobject, jstring 
     if (!EngineStarted.compare_exchange_strong(Expected, true, std::memory_order_acq_rel)) {
         return;
     }
+
+    InitWindow();
 
     const char* Ip = Env->GetStringUTFChars(IpStr, 0);
 
