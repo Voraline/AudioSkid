@@ -28,5 +28,6 @@ target_link_libraries(AudioSkidServer
     ole32
     mmdevapi
     avrt
+    uuid
     opus
 )
