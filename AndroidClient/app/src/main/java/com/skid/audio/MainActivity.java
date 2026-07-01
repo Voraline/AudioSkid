@@ -79,36 +79,46 @@ public class MainActivity extends Activity {
             for (float Freq : GridFreqs) {
                 float X = FreqToX(Freq, Width);
                 Cv.drawLine(X, 0, X, Height, GridPaint);
-                String Label = Freq >= 1000 ? ((int) (Freq / 1000)) + "k" : ((int) Freq) + "";
-                Cv.drawText(Label, X + 4, Height - 6, TextPaint);
             }
 
-            if (!IsConnected) return;
+            if (IsConnected) {
+                float[] Bins = GetSpectrum();
+                LinePath.reset();
+                boolean Started = false;
 
-            float[] Bins = GetSpectrum();
-            LinePath.reset();
-            boolean Started = false;
+                for (int I = 1; I < Bins.length; I++) {
+                    float Freq = I * BinHz;
+                    if (Freq < MinFreq) continue;
+                    if (Freq > MaxFreq) break;
 
-            for (int I = 1; I < Bins.length; I++) {
-                float Freq = I * BinHz;
-                if (Freq < MinFreq) continue;
-                if (Freq > MaxFreq) break;
+                    float X = FreqToX(Freq, Width);
+                    float Norm = (Bins[I] - MinDb) / (MaxDb - MinDb);
+                    Norm = Math.max(0.0f, Math.min(1.0f, Norm));
+                    float Y = Height - Norm * Height;
 
-                float X = FreqToX(Freq, Width);
-                float Norm = (Bins[I] - MinDb) / (MaxDb - MinDb);
-                Norm = Math.max(0.0f, Math.min(1.0f, Norm));
-                float Y = Height - Norm * Height;
-
-                if (!Started) {
-                    LinePath.moveTo(X, Y);
-                    Started = true;
-                } else {
-                    LinePath.lineTo(X, Y);
+                    if (!Started) {
+                        LinePath.moveTo(X, Y);
+                        Started = true;
+                    } else {
+                        LinePath.lineTo(X, Y);
+                    }
                 }
+
+                Cv.drawPath(LinePath, LinePaint);
             }
 
-            Cv.drawPath(LinePath, LinePaint);
-            postInvalidateOnAnimation();
+            for (float Freq : GridFreqs) {
+                float X = FreqToX(Freq, Width);
+                String Label = Freq >= 1000 ? ((int) (Freq / 1000)) + "k" : ((int) Freq) + "";
+                float TextWidth = TextPaint.measureText(Label);
+                float LabelX = Math.min(X + 6, Width - TextWidth - 4);
+                Cv.drawRect(LabelX - 2, 6, LabelX + TextWidth + 2, 30, BgPaint);
+                Cv.drawText(Label, LabelX, 24, TextPaint);
+            }
+
+            if (IsConnected) {
+                postInvalidateOnAnimation();
+            }
         }
     }
 
@@ -120,18 +130,24 @@ public class MainActivity extends Activity {
         Layout.setOrientation(LinearLayout.VERTICAL);
         Layout.setGravity(Gravity.CENTER);
         Layout.setPadding(60, 60, 60, 60);
+        Layout.setBackgroundColor(Color.parseColor("#0A0A0A"));
 
         TextView Title = new TextView(this);
         Title.setText("AUDIO SKID");
         Title.setTextSize(24);
+        Title.setTextColor(Color.parseColor("#39FF14"));
         Title.setGravity(Gravity.CENTER);
         Title.setPadding(0, 0, 0, 50);
 
         EditText IpInput = new EditText(this);
         IpInput.setHint("PC IP Address");
+        IpInput.setHintTextColor(Color.parseColor("#666666"));
+        IpInput.setTextColor(Color.parseColor("#EEEEEE"));
 
         Button ConnectBtn = new Button(this);
         ConnectBtn.setText("CONNECT");
+        ConnectBtn.setTextColor(Color.parseColor("#39FF14"));
+        ConnectBtn.setBackgroundColor(Color.parseColor("#1A1A1A"));
 
         SpectrumViewInstance = new SpectrumView(this);
         LinearLayout.LayoutParams SpectrumParams = new LinearLayout.LayoutParams(
