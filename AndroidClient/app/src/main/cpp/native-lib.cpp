@@ -7,18 +7,85 @@
 #include <atomic>
 #include <sched.h>
 #include <cstring>
+#include <cmath>
+#include <algorithm>
 #include <opus.h>
 
 #define BUFFER_MASK 16383
 #define BUFFER_SIZE 16384
 #define FRAME_SAMPLES 960
 #define MAX_PACKET_BYTES 1500
+#define FFT_SIZE 64
+#define SPECTRUM_BINS 32
 
 int SockFd = -1;
 short RingBuffer[BUFFER_SIZE];
 std::atomic<int> Head{ 0 };
 std::atomic<int> Tail{ 0 };
 std::atomic<bool> CanPlay{ false };
+std::atomic<bool> EngineStarted{ false };
+std::atomic<bool> SpectrumLock{ false };
+
+float FftReal[FFT_SIZE];
+float FftImag[FFT_SIZE];
+float SpectrumBins[SPECTRUM_BINS];
+
+void ComputeFft() {
+    for (int I = 1, J = 0; I < FFT_SIZE; I++) {
+        int Bit = FFT_SIZE >> 1;
+        for (; J & Bit; Bit >>= 1) J ^= Bit;
+        J ^= Bit;
+        if (I < J) {
+            std::swap(FftReal[I], FftReal[J]);
+            std::swap(FftImag[I], FftImag[J]);
+        }
+    }
+
+    for (int Len = 2; Len <= FFT_SIZE; Len <<= 1) {
+        float Angle = -2.0f * (float)M_PI / Len;
+        float WReal = cosf(Angle);
+        float WImag = sinf(Angle);
+        for (int I = 0; I < FFT_SIZE; I += Len) {
+            float CurReal = 1.0f, CurImag = 0.0f;
+            for (int K = 0; K < Len / 2; K++) {
+                float UReal = FftReal[I + K];
+                float UImag = FftImag[I + K];
+                float VReal = FftReal[I + K + Len / 2] * CurReal - FftImag[I + K + Len / 2] * CurImag;
+                float VImag = FftReal[I + K + Len / 2] * CurImag + FftImag[I + K + Len / 2] * CurReal;
+                FftReal[I + K] = UReal + VReal;
+                FftImag[I + K] = UImag + VImag;
+                FftReal[I + K + Len / 2] = UReal - VReal;
+                FftImag[I + K + Len / 2] = UImag - VImag;
+                float NextReal = CurReal * WReal - CurImag * WImag;
+                float NextImag = CurReal * WImag + CurImag * WReal;
+                CurReal = NextReal;
+                CurImag = NextImag;
+            }
+        }
+    }
+}
+
+void UpdateSpectrum() {
+    const int CurrentHead = Head.load(std::memory_order_acquire);
+    for (int I = 0; I < FFT_SIZE; I++) {
+        int Index = (CurrentHead - FFT_SIZE + I) & BUFFER_MASK;
+        float Sample = RingBuffer[Index] / 32768.0f;
+        float Window = 0.5f - 0.5f * cosf(2.0f * (float)M_PI * I / (FFT_SIZE - 1));
+        FftReal[I] = Sample * Window;
+        FftImag[I] = 0.0f;
+    }
+
+    ComputeFft();
+
+    bool Expected = false;
+    if (SpectrumLock.compare_exchange_strong(Expected, true, std::memory_order_acquire)) {
+        for (int I = 0; I < SPECTRUM_BINS; I++) {
+            float Magnitude = sqrtf(FftReal[I] * FftReal[I] + FftImag[I] * FftImag[I]) / FFT_SIZE;
+            SpectrumBins[I] = SpectrumBins[I] * 0.6f + Magnitude * 0.4f;
+        }
+        SpectrumLock.store(false, std::memory_order_release);
+    }
+}
 
 aaudio_data_callback_result_t AudioCallback(AAudioStream* Stream, void* UserData, void* AudioData, int32_t NumFrames) {
     if (!CanPlay.load(std::memory_order_acquire)) {
@@ -52,7 +119,12 @@ aaudio_data_callback_result_t AudioCallback(AAudioStream* Stream, void* UserData
 }
 
 extern "C" JNIEXPORT void JNICALL
-Java_com_skid_audio_MainActivity_startAudioEngine(JNIEnv* Env, jobject, jstring IpStr) {
+Java_com_skid_audio_MainActivity_StartAudioEngine(JNIEnv* Env, jobject, jstring IpStr) {
+    bool Expected = false;
+    if (!EngineStarted.compare_exchange_strong(Expected, true, std::memory_order_acq_rel)) {
+        return;
+    }
+
     const char* Ip = Env->GetStringUTFChars(IpStr, 0);
 
     SockFd = socket(AF_INET, SOCK_DGRAM, 0);
@@ -125,5 +197,21 @@ Java_com_skid_audio_MainActivity_startAudioEngine(JNIEnv* Env, jobject, jstring 
         }
 
         Head.store(NextHead, std::memory_order_release);
+        UpdateSpectrum();
     }
+}
+
+extern "C" JNIEXPORT jfloatArray JNICALL
+Java_com_skid_audio_MainActivity_GetSpectrum(JNIEnv* Env, jobject) {
+    jfloatArray Result = Env->NewFloatArray(SPECTRUM_BINS);
+
+    bool Expected = false;
+    while (!SpectrumLock.compare_exchange_weak(Expected, true, std::memory_order_acquire)) {
+        Expected = false;
+    }
+
+    Env->SetFloatArrayRegion(Result, 0, SPECTRUM_BINS, SpectrumBins);
+    SpectrumLock.store(false, std::memory_order_release);
+
+    return Result;
 }
