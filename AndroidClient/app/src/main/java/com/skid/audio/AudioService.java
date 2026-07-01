@@ -16,7 +16,6 @@ public class AudioService extends Service {
     }
 
     public native void StartAudioEngine(String Ip);
-    public native float[] GetSpectrum();
 
     public static final String ExtraIp = "ip";
     private static final String ChannelId = "audio_skid_playback";
