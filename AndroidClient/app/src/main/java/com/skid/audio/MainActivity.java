@@ -32,8 +32,6 @@ public class MainActivity extends Activity {
         public void onServiceConnected(ComponentName Name, IBinder Service) {
             BoundService = ((AudioService.LocalBinder) Service).GetService();
             IsServiceBound = true;
-            IsConnected = true;
-            SetConnectedUi(true);
         }
 
         @Override
@@ -129,6 +127,8 @@ public class MainActivity extends Activity {
         if (!IsServiceBound) {
             bindService(ServiceIntent, Connection, Context.BIND_AUTO_CREATE);
         }
+        IsConnected = true;
+        SetConnectedUi(true);
     }
 
     @Override
