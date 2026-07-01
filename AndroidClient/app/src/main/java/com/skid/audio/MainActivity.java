@@ -1,38 +1,52 @@
 package com.skid.audio;
 
+import android.Manifest;
 import android.app.Activity;
+import android.content.ComponentName;
 import android.content.Context;
+import android.content.Intent;
+import android.content.ServiceConnection;
+import android.content.pm.PackageManager;
 import android.graphics.Canvas;
 import android.graphics.Color;
 import android.graphics.Paint;
 import android.graphics.Path;
+import android.os.Build;
 import android.os.Bundle;
+import android.os.IBinder;
 import android.view.Gravity;
 import android.view.View;
 import android.widget.Button;
 import android.widget.EditText;
 import android.widget.LinearLayout;
-import android.widget.TextView;
 
 public class MainActivity extends Activity {
-    static {
-        System.loadLibrary("audio-skid");
-    }
-
-    public native void StartAudioEngine(String Ip);
-    public native float[] GetSpectrum();
-
     private boolean IsConnected = false;
     private SpectrumView SpectrumViewInstance;
 
-    private static final float MinFreq = 20.0f;
+    private AudioService BoundService;
+    private boolean IsServiceBound = false;
+    private String PendingIp = null;
+
     private static final float MaxFreq = 20000.0f;
+    private static final float BinHz = 48000.0f / 1024.0f;
     private static final float MinDb = 0.0f;
     private static final float MaxDb = 100.0f;
-    private static final float BinHz = 48000.0f / 1024.0f;
-    private static final float LogMin = (float) Math.log10(MinFreq);
-    private static final float LogMax = (float) Math.log10(MaxFreq);
-    private static final float[] GridFreqs = { 31.25f, 62.5f, 125f, 250f, 500f, 1000f, 2000f, 4000f, 8000f, 16000f };
+    private static final float[] GridFreqs = { 0f, 2000f, 4000f, 6000f, 8000f, 10000f, 12000f, 14000f, 16000f, 18000f, 20000f };
+
+    private final ServiceConnection Connection = new ServiceConnection() {
+        @Override
+        public void onServiceConnected(ComponentName Name, IBinder Service) {
+            BoundService = ((AudioService.LocalBinder) Service).GetService();
+            IsServiceBound = true;
+        }
+
+        @Override
+        public void onServiceDisconnected(ComponentName Name) {
+            BoundService = null;
+            IsServiceBound = false;
+        }
+    };
 
     private class SpectrumView extends View {
         private final Paint LinePaint;
@@ -65,8 +79,7 @@ public class MainActivity extends Activity {
         }
 
         private float FreqToX(float Freq, int Width) {
-            float LogF = (float) Math.log10(Freq);
-            return (LogF - LogMin) / (LogMax - LogMin) * Width;
+            return Freq / MaxFreq * Width;
         }
 
         @Override
@@ -81,14 +94,13 @@ public class MainActivity extends Activity {
                 Cv.drawLine(X, 0, X, Height, GridPaint);
             }
 
-            if (IsConnected) {
-                float[] Bins = GetSpectrum();
+            if (IsConnected && IsServiceBound) {
+                float[] Bins = BoundService.GetSpectrum();
                 LinePath.reset();
                 boolean Started = false;
 
                 for (int I = 1; I < Bins.length; I++) {
                     float Freq = I * BinHz;
-                    if (Freq < MinFreq) continue;
                     if (Freq > MaxFreq) break;
 
                     float X = FreqToX(Freq, Width);
@@ -111,7 +123,7 @@ public class MainActivity extends Activity {
                 float X = FreqToX(Freq, Width);
                 String Label = Freq >= 1000 ? ((int) (Freq / 1000)) + "k" : ((int) Freq) + "";
                 float TextWidth = TextPaint.measureText(Label);
-                float LabelX = Math.min(X + 6, Width - TextWidth - 4);
+                float LabelX = Math.min(Math.max(X - TextWidth / 2, 2), Width - TextWidth - 2);
                 Cv.drawRect(LabelX - 2, 6, LabelX + TextWidth + 2, 30, BgPaint);
                 Cv.drawText(Label, LabelX, 24, TextPaint);
             }
@@ -132,13 +144,6 @@ public class MainActivity extends Activity {
         Layout.setPadding(60, 60, 60, 60);
         Layout.setBackgroundColor(Color.parseColor("#0A0A0A"));
 
-        TextView Title = new TextView(this);
-        Title.setText("AUDIO SKID");
-        Title.setTextSize(24);
-        Title.setTextColor(Color.parseColor("#39FF14"));
-        Title.setGravity(Gravity.CENTER);
-        Title.setPadding(0, 0, 0, 50);
-
         EditText IpInput = new EditText(this);
         IpInput.setHint("PC IP Address");
         IpInput.setHintTextColor(Color.parseColor("#666666"));
@@ -151,10 +156,9 @@ public class MainActivity extends Activity {
 
         SpectrumViewInstance = new SpectrumView(this);
         LinearLayout.LayoutParams SpectrumParams = new LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.MATCH_PARENT, 500);
+                LinearLayout.LayoutParams.MATCH_PARENT, 0, 1.0f);
         SpectrumParams.topMargin = 60;
 
-        Layout.addView(Title);
         Layout.addView(IpInput);
         Layout.addView(ConnectBtn);
         Layout.addView(SpectrumViewInstance, SpectrumParams);
@@ -169,9 +173,45 @@ public class MainActivity extends Activity {
             IsConnected = true;
             ConnectBtn.setVisibility(View.GONE);
             IpInput.setVisibility(View.GONE);
+            PendingIp = Ip;
 
-            new Thread(() -> StartAudioEngine(Ip)).start();
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
+                    checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS)
+                            != PackageManager.PERMISSION_GRANTED) {
+                requestPermissions(new String[]{Manifest.permission.POST_NOTIFICATIONS}, 1);
+            } else {
+                LaunchService(Ip);
+            }
+
             SpectrumViewInstance.postInvalidateOnAnimation();
         });
+    }
+
+    @Override
+    public void onRequestPermissionsResult(int RequestCode, String[] Permissions, int[] GrantResults) {
+        super.onRequestPermissionsResult(RequestCode, Permissions, GrantResults);
+        if (RequestCode == 1 && PendingIp != null) {
+            LaunchService(PendingIp);
+        }
+    }
+
+    private void LaunchService(String Ip) {
+        Intent ServiceIntent = new Intent(this, AudioService.class);
+        ServiceIntent.putExtra(AudioService.ExtraIp, Ip);
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            startForegroundService(ServiceIntent);
+        } else {
+            startService(ServiceIntent);
+        }
+        bindService(ServiceIntent, Connection, Context.BIND_AUTO_CREATE);
+    }
+
+    @Override
+    protected void onDestroy() {
+        super.onDestroy();
+        if (IsServiceBound) {
+            unbindService(Connection);
+            IsServiceBound = false;
+        }
     }
 }

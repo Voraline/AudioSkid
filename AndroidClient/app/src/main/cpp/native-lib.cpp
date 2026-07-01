@@ -126,7 +126,7 @@ aaudio_data_callback_result_t AudioCallback(AAudioStream* Stream, void* UserData
 }
 
 extern "C" JNIEXPORT void JNICALL
-Java_com_skid_audio_MainActivity_StartAudioEngine(JNIEnv* Env, jobject, jstring IpStr) {
+Java_com_skid_audio_AudioService_StartAudioEngine(JNIEnv* Env, jobject, jstring IpStr) {
     bool Expected = false;
     if (!EngineStarted.compare_exchange_strong(Expected, true, std::memory_order_acq_rel)) {
         return;
@@ -211,7 +211,7 @@ Java_com_skid_audio_MainActivity_StartAudioEngine(JNIEnv* Env, jobject, jstring 
 }
 
 extern "C" JNIEXPORT jfloatArray JNICALL
-Java_com_skid_audio_MainActivity_GetSpectrum(JNIEnv* Env, jobject) {
+Java_com_skid_audio_AudioService_GetSpectrum(JNIEnv* Env, jobject) {
     jfloatArray Result = Env->NewFloatArray(SPECTRUM_BINS);
 
     bool Expected = false;

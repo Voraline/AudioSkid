@@ -3,12 +3,16 @@
     package="com.skid.audio">
 
     <uses-permission android:name="android.permission.INTERNET" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK" />
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <uses-permission android:name="android.permission.WAKE_LOCK" />
 
     <application
         android:label="AudioSkid"
         android:hasCode="true"
         android:theme="@android:style/Theme.DeviceDefault.NoActionBar">
-        
+
         <activity
             android:name=".MainActivity"
             android:exported="true">
@@ -17,5 +21,11 @@
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
         </activity>
+
+        <service
+            android:name=".AudioService"
+            android:exported="false"
+            android:foregroundServiceType="mediaPlayback" />
+
     </application>
 </manifest>
