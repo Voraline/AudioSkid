@@ -20,7 +20,7 @@
 #define NetPacketSize 1502
 
 typedef struct {
-    sockaddr_in Addr;
+    struct sockaddr_in Addr;
 } Client;
 
 static SOCKET ServerSocket;
@@ -39,10 +39,10 @@ static float InvChannels;
 
 DWORD WINAPI ListenerThread(LPVOID Param) {
     char Buffer;
-    sockaddr_in TempAddr;
+    struct sockaddr_in TempAddr;
     int Len = sizeof(TempAddr);
     while (1) {
-        if (recvfrom(ServerSocket, &Buffer, 1, 0, (sockaddr*)&TempAddr, &Len) > 0) {
+        if (recvfrom(ServerSocket, &Buffer, 1, 0, (struct sockaddr*)&TempAddr, &Len) > 0) {
             EnterCriticalSection(&ClientMutex);
             int Found = 0;
             for (int I = 0; I < ClientCount; I++) {
@@ -91,7 +91,7 @@ void FlushFrame() {
         LeaveCriticalSection(&ClientMutex);
 
         for (int I = 0; I < SnapshotCount; I++) {
-            sendto(ServerSocket, (char*)NetPacket, TotalBytes, 0, (sockaddr*)&ClientsSnapshot[I].Addr, sizeof(ClientsSnapshot[I].Addr));
+            sendto(ServerSocket, (char*)NetPacket, TotalBytes, 0, (struct sockaddr*)&ClientsSnapshot[I].Addr, sizeof(ClientsSnapshot[I].Addr));
         }
     }
     PacketIndex = 0;
@@ -118,11 +118,11 @@ int main() {
     setsockopt(ServerSocket, SOL_SOCKET, SO_SNDBUF, (char*)&BufSize, 4);
     setsockopt(ServerSocket, IPPROTO_IP, IP_TOS, (char*)&Tos, 4);
 
-    sockaddr_in Addr;
+    struct sockaddr_in Addr;
     memset(&Addr, 0, sizeof(Addr));
     Addr.sin_family = AF_INET;
     Addr.sin_port = htons(11000);
-    bind(ServerSocket, (sockaddr*)&Addr, sizeof(Addr));
+    bind(ServerSocket, (struct sockaddr*)&Addr, sizeof(Addr));
 
     CreateThread(NULL, 0, ListenerThread, NULL, 0, NULL);
 
