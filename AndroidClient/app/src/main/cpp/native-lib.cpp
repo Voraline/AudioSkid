@@ -7,6 +7,7 @@
 #include <atomic>
 #include <sched.h>
 #include <cstring>
+#include <cstdint>
 #include <cmath>
 #include <algorithm>
 #include <opus.h>
@@ -17,6 +18,10 @@
 #define MAX_PACKET_BYTES 1500
 #define FFT_SIZE 1024
 #define SPECTRUM_BINS 512
+#define JITTER_START_SAMPLES 3840
+#define JITTER_HIGH_WATER_SAMPLES 9600
+#define JITTER_TARGET_SAMPLES 4800
+#define MAX_CONCEALED_FRAMES 25
 
 int SockFd = -1;
 short RingBuffer[BUFFER_SIZE];
@@ -125,6 +130,32 @@ aaudio_data_callback_result_t AudioCallback(AAudioStream* Stream, void* UserData
     return AAUDIO_CALLBACK_RESULT_CONTINUE;
 }
 
+void PushFrame(const short* PcmFrame) {
+    const int CurrentHead = Head.load(std::memory_order_relaxed);
+    const int CurrentTail = Tail.load(std::memory_order_acquire);
+
+    const int Available = (CurrentHead - CurrentTail) & BUFFER_MASK;
+    if (Available > JITTER_HIGH_WATER_SAMPLES) {
+        Tail.store((CurrentHead - JITTER_TARGET_SAMPLES) & BUFFER_MASK, std::memory_order_release);
+    }
+
+    if (!CanPlay.load(std::memory_order_relaxed) && Available >= JITTER_START_SAMPLES) {
+        CanPlay.store(true, std::memory_order_release);
+    }
+
+    const int NextHead = (CurrentHead + FRAME_SAMPLES) & BUFFER_MASK;
+    if (NextHead >= CurrentHead) {
+        memcpy(&RingBuffer[CurrentHead], PcmFrame, FRAME_SAMPLES * 2);
+    } else {
+        const int Split = BUFFER_SIZE - CurrentHead;
+        memcpy(&RingBuffer[CurrentHead], PcmFrame, Split * 2);
+        memcpy(&RingBuffer[0], PcmFrame + Split, (FRAME_SAMPLES - Split) * 2);
+    }
+
+    Head.store(NextHead, std::memory_order_release);
+    UpdateSpectrum();
+}
+
 extern "C" JNIEXPORT void JNICALL
 Java_com_skid_audio_AudioService_StartAudioEngine(JNIEnv* Env, jobject, jstring IpStr) {
     bool Expected = false;
@@ -177,36 +208,45 @@ Java_com_skid_audio_AudioService_StartAudioEngine(JNIEnv* Env, jobject, jstring 
     unsigned char NetBuf[MAX_PACKET_BYTES];
     short PcmFrame[FRAME_SAMPLES];
 
+    bool HaveExpectedSeq = false;
+    uint16_t ExpectedSeq = 0;
+
     while (true) {
         const int Received = recv(SockFd, (char*)NetBuf, MAX_PACKET_BYTES, 0);
-        if (Received <= 0) continue;
+        if (Received <= 2) continue;
 
-        const int Decoded = opus_decode(Decoder, NetBuf, Received, PcmFrame, FRAME_SAMPLES, 0);
-        if (Decoded != FRAME_SAMPLES) continue;
+        uint16_t NetSeq;
+        memcpy(&NetSeq, NetBuf, 2);
+        const uint16_t Seq = ntohs(NetSeq);
+        const unsigned char* OpusData = NetBuf + 2;
+        const int OpusLen = Received - 2;
 
-        const int CurrentHead = Head.load(std::memory_order_relaxed);
-        const int CurrentTail = Tail.load(std::memory_order_acquire);
+        int MissingFrames = 0;
+        if (HaveExpectedSeq) {
+            MissingFrames = (uint16_t)(Seq - ExpectedSeq);
+            if (MissingFrames > MAX_CONCEALED_FRAMES) {
+                MissingFrames = 0;
+            }
+        }
+        HaveExpectedSeq = true;
+        ExpectedSeq = Seq + 1;
 
-        const int Available = (CurrentHead - CurrentTail) & BUFFER_MASK;
-        if (Available > 2400) {
-            Tail.store((CurrentHead - 960) & BUFFER_MASK, std::memory_order_release);
+        for (int M = 0; M < MissingFrames; M++) {
+            int Decoded;
+            if (M == MissingFrames - 1) {
+                Decoded = opus_decode(Decoder, OpusData, OpusLen, PcmFrame, FRAME_SAMPLES, 1);
+            } else {
+                Decoded = opus_decode(Decoder, nullptr, 0, PcmFrame, FRAME_SAMPLES, 0);
+            }
+            if (Decoded == FRAME_SAMPLES) {
+                PushFrame(PcmFrame);
+            }
         }
 
-        if (!CanPlay.load(std::memory_order_relaxed) && Available >= 960) {
-            CanPlay.store(true, std::memory_order_release);
+        const int Decoded = opus_decode(Decoder, OpusData, OpusLen, PcmFrame, FRAME_SAMPLES, 0);
+        if (Decoded == FRAME_SAMPLES) {
+            PushFrame(PcmFrame);
         }
-
-        const int NextHead = (CurrentHead + FRAME_SAMPLES) & BUFFER_MASK;
-        if (NextHead >= CurrentHead) {
-            memcpy(&RingBuffer[CurrentHead], PcmFrame, FRAME_SAMPLES * 2);
-        } else {
-            const int Split = BUFFER_SIZE - CurrentHead;
-            memcpy(&RingBuffer[CurrentHead], PcmFrame, Split * 2);
-            memcpy(&RingBuffer[0], PcmFrame + Split, (FRAME_SAMPLES - Split) * 2);
-        }
-
-        Head.store(NextHead, std::memory_order_release);
-        UpdateSpectrum();
     }
 }
 

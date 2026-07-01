@@ -8,6 +8,8 @@
 #include <thread>
 #include <vector>
 #include <mutex>
+#include <cstdint>
+#include <cstring>
 #include <opus.h>
 
 #pragma comment(lib, "ws2_32.lib")
@@ -120,12 +122,13 @@ int main() {
     opus_encoder_ctl(Encoder, OPUS_SET_VBR_CONSTRAINT(1));
     opus_encoder_ctl(Encoder, OPUS_SET_COMPLEXITY(10));
     opus_encoder_ctl(Encoder, OPUS_SET_SIGNAL(OPUS_SIGNAL_MUSIC));
-    opus_encoder_ctl(Encoder, OPUS_SET_PACKET_LOSS_PERC(0));
+    opus_encoder_ctl(Encoder, OPUS_SET_PACKET_LOSS_PERC(5));
     opus_encoder_ctl(Encoder, OPUS_SET_INBAND_FEC(1));
     opus_encoder_ctl(Encoder, OPUS_SET_DTX(1));
     // opus_encoder_ctl(Encoder, OPUS_SET_BANDWIDTH(OPUS_BANDWIDTH_SUPERWIDEBAND));
 
-    unsigned char OpusPacket[1500];
+    unsigned char NetPacket[1502];
+    uint16_t SeqNum = 0;
 
     auto MixToMono = [Channels, InvChannels](const float* Samples, UINT32 FrameIndex) -> float {
         const float* Base = Samples + FrameIndex * Channels;
@@ -143,15 +146,19 @@ int main() {
     };
 
     auto FlushFrame = [&]() {
-        int EncodedBytes = opus_encode(Encoder, PacketBuffer, FRAME_SAMPLES, OpusPacket, sizeof(OpusPacket));
+        int EncodedBytes = opus_encode(Encoder, PacketBuffer, FRAME_SAMPLES, NetPacket + 2, sizeof(NetPacket) - 2);
         if (EncodedBytes > 0) {
+            uint16_t NetSeq = htons(SeqNum++);
+            memcpy(NetPacket, &NetSeq, 2);
+            const int TotalBytes = EncodedBytes + 2;
+
             ClientsSnapshot.clear();
             {
                 std::lock_guard<std::mutex> Lock(ClientMutex);
                 ClientsSnapshot = Clients;
             }
             for (auto& C : ClientsSnapshot) {
-                sendto(ServerSocket, (char*)OpusPacket, EncodedBytes, 0, (sockaddr*)&C.Addr, sizeof(C.Addr));
+                sendto(ServerSocket, (char*)NetPacket, TotalBytes, 0, (sockaddr*)&C.Addr, sizeof(C.Addr));
             }
         }
         PacketIndex = 0;
