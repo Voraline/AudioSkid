@@ -17,7 +17,7 @@ set(OPUS_BUILD_TESTING OFF CACHE BOOL "" FORCE)
 set(OPUS_BUILD_PROGRAMS OFF CACHE BOOL "" FORCE)
 add_subdirectory(third_party/opus opus_build)
 
-add_executable(AudioSkidServer main.cpp)
+add_executable(AudioSkidServer main.c)
 
 target_include_directories(AudioSkidServer PRIVATE
     third_party/opus/include

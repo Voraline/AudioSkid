@@ -24,11 +24,11 @@ set(OPUS_PRESUME_NEON ON CACHE BOOL "" FORCE)
 add_subdirectory(third_party/opus opus_build)
 
 add_library(audio-skid SHARED
-    native-lib.cpp
+    native-lib.c
 )
 
 target_compile_options(audio-skid PRIVATE
-    -std=c++17
+    -std=c11
     -O3
     -march=armv8.2-a+simd
     -mtune=cortex-a76
@@ -43,7 +43,6 @@ target_compile_options(audio-skid PRIVATE
     -fno-stack-protector
     -fno-unwind-tables
     -fno-asynchronous-unwind-tables
-    -fno-exceptions
     -ffunction-sections
     -fdata-sections
     -fvisibility=hidden
