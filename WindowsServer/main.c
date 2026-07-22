@@ -38,6 +38,8 @@ static short PacketBuffer[FrameSamples];
 static int PacketIndex = 0;
 static unsigned char NetPacket[NetPacketSize];
 static uint16_t SeqNum = 0;
+static ULONGLONG BytesSent = 0;
+static ULONGLONG LastPrintTick = 0;
 static int Channels;
 static float InvChannels;
 
@@ -96,6 +98,20 @@ void FlushFrame() {
 
         for (int I = 0; I < SnapshotCount; I++) {
             sendto(ServerSocket, (char*)NetPacket, TotalBytes, 0, (struct sockaddr*)&ClientsSnapshot[I].Addr, sizeof(ClientsSnapshot[I].Addr));
+        }
+
+        BytesSent += (ULONGLONG)TotalBytes * SnapshotCount;
+        ULONGLONG Now = GetTickCount64();
+        if (LastPrintTick == 0) {
+            LastPrintTick = Now;
+        }
+        ULONGLONG Elapsed = Now - LastPrintTick;
+        if (Elapsed >= 1000) {
+            double Kbps = (double)(BytesSent * 8) / 1000.0 / ((double)Elapsed / 1000.0);
+            printf("\rCurrent: %.1f kbps          ", Kbps);
+            fflush(stdout);
+            BytesSent = 0;
+            LastPrintTick = Now;
         }
     }
     PacketIndex = 0;
@@ -180,7 +196,7 @@ int main() {
 
     int OpusErr = 0;
     Encoder = opus_encoder_create(48000, 1, OPUS_APPLICATION_RESTRICTED_LOWDELAY, &OpusErr);
-    opus_encoder_ctl(Encoder, OPUS_SET_BITRATE(48000));
+    opus_encoder_ctl(Encoder, OPUS_SET_BITRATE(96000));
     opus_encoder_ctl(Encoder, OPUS_SET_SIGNAL(OPUS_SIGNAL_MUSIC));
 
     float PrevMono = 0.0f;
