@@ -198,6 +198,7 @@ int main() {
     Encoder = opus_encoder_create(48000, 1, OPUS_APPLICATION_RESTRICTED_LOWDELAY, &OpusErr);
     opus_encoder_ctl(Encoder, OPUS_SET_BITRATE(96000));
     opus_encoder_ctl(Encoder, OPUS_SET_SIGNAL(OPUS_SIGNAL_MUSIC));
+    opus_encoder_ctl(Encoder, OPUS_SET_COMPLEXITY(10));
 
     float PrevMono = 0.0f;
     int HavePrev = 0;
