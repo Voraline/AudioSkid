@@ -163,10 +163,10 @@ int main() {
     WAVEFORMATEX* Format;
     AudioClient->lpVtbl->GetMixFormat(AudioClient, &Format);
 
-    REFERENCE_TIME Duration;
-    AudioClient->lpVtbl->GetDevicePeriod(AudioClient, &Duration, 0);
+    REFERENCE_TIME DefaultPeriod, MinPeriod;
+    AudioClient->lpVtbl->GetDevicePeriod(AudioClient, &DefaultPeriod, &MinPeriod);
 
-    AudioClient->lpVtbl->Initialize(AudioClient, AUDCLNT_SHAREMODE_SHARED, AUDCLNT_STREAMFLAGS_LOOPBACK | AUDCLNT_STREAMFLAGS_EVENTCALLBACK, Duration, 0, Format, 0);
+    AudioClient->lpVtbl->Initialize(AudioClient, AUDCLNT_SHAREMODE_SHARED, AUDCLNT_STREAMFLAGS_LOOPBACK | AUDCLNT_STREAMFLAGS_EVENTCALLBACK, MinPeriod, 0, Format, 0);
 
     HANDLE AudioEvent = CreateEvent(0, 0, 0, 0);
     AudioClient->lpVtbl->SetEventHandle(AudioClient, AudioEvent);
