@@ -1,27 +1,26 @@
-cmake_minimum_required(VERSION 3.10)
-project(AudioSkidServer)
-
-# Vendored Opus declares an old minimum CMake version; this keeps it
-# configurable under modern CMake without touching Opus's own files.
-set(CMAKE_POLICY_VERSION_MINIMUM 3.5)
+cmake_minimum_required(VERSION 3.14)
+project(AudioSkidServer C)
 
 if(NOT MSVC)
     message(FATAL_ERROR "This project only supports MSVC.")
 endif()
 
-set(CMAKE_CXX_FLAGS_RELEASE "/O2 /arch:AVX2 /fp:precise")
+set(CMAKE_C_FLAGS_RELEASE "/O2 /arch:AVX2 /fp:precise")
 
-# Vendored Opus codec, built as a static lib.
+include(FetchContent)
+
 set(OPUS_BUILD_SHARED_LIBRARY OFF CACHE BOOL "" FORCE)
 set(OPUS_BUILD_TESTING OFF CACHE BOOL "" FORCE)
 set(OPUS_BUILD_PROGRAMS OFF CACHE BOOL "" FORCE)
-add_subdirectory(third_party/opus opus_build)
+
+FetchContent_Declare(
+    opus
+    GIT_REPOSITORY https://github.com/xiph/opus.git
+    GIT_TAG v1.6.1
+)
+FetchContent_MakeAvailable(opus)
 
 add_executable(AudioSkidServer main.c)
-
-target_include_directories(AudioSkidServer PRIVATE
-    third_party/opus/include
-)
 
 target_link_libraries(AudioSkidServer
     ws2_32

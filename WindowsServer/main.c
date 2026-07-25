@@ -38,10 +38,24 @@ static short PacketBuffer[FrameSamples];
 static int PacketIndex = 0;
 static unsigned char NetPacket[NetPacketSize];
 static uint16_t SeqNum = 0;
-static ULONGLONG BytesSent = 0;
-static ULONGLONG LastPrintTick = 0;
+static volatile LONG64 BytesSent = 0;
 static int Channels;
 static float InvChannels;
+
+DWORD WINAPI StatsThread(LPVOID Param) {
+    ULONGLONG LastTick = GetTickCount64();
+    while (1) {
+        Sleep(1000);
+        ULONGLONG Now = GetTickCount64();
+        ULONGLONG Elapsed = Now - LastTick;
+        LastTick = Now;
+        LONG64 Bytes = InterlockedExchange64(&BytesSent, 0);
+        double Kbps = (double)(Bytes * 8) / 1000.0 / ((double)Elapsed / 1000.0);
+        printf("\rCurrent: %.1f kbps          ", Kbps);
+        fflush(stdout);
+    }
+    return 0;
+}
 
 DWORD WINAPI ListenerThread(LPVOID Param) {
     char Buffer;
@@ -100,19 +114,7 @@ void FlushFrame() {
             sendto(ServerSocket, (char*)NetPacket, TotalBytes, 0, (struct sockaddr*)&ClientsSnapshot[I].Addr, sizeof(ClientsSnapshot[I].Addr));
         }
 
-        BytesSent += (ULONGLONG)TotalBytes * SnapshotCount;
-        ULONGLONG Now = GetTickCount64();
-        if (LastPrintTick == 0) {
-            LastPrintTick = Now;
-        }
-        ULONGLONG Elapsed = Now - LastPrintTick;
-        if (Elapsed >= 1000) {
-            double Kbps = (double)(BytesSent * 8) / 1000.0 / ((double)Elapsed / 1000.0);
-            printf("\rCurrent: %.1f kbps          ", Kbps);
-            fflush(stdout);
-            BytesSent = 0;
-            LastPrintTick = Now;
-        }
+        InterlockedAdd64(&BytesSent, (LONG64)TotalBytes * SnapshotCount);
     }
     PacketIndex = 0;
 }
@@ -135,7 +137,9 @@ int main() {
     ServerSocket = socket(AF_INET, SOCK_DGRAM, 0);
     int BufSize = 4194304;
     int Tos = 0x10;
-    setsockopt(ServerSocket, SOL_SOCKET, SO_SNDBUF, (char*)&BufSize, 4);
+    if (setsockopt(ServerSocket, SOL_SOCKET, SO_SNDBUF, (char*)&BufSize, 4) != 0) {
+        MessageBoxA(0, "Failed to set socket send buffer size.", "AudioSkid", MB_OK | MB_ICONWARNING);
+    }
     setsockopt(ServerSocket, IPPROTO_IP, IP_TOS, (char*)&Tos, 4);
 
     struct sockaddr_in Addr;
@@ -196,10 +200,15 @@ int main() {
 
     int OpusErr = 0;
     Encoder = opus_encoder_create(48000, 1, OPUS_APPLICATION_RESTRICTED_LOWDELAY, &OpusErr);
+    if (!Encoder || OpusErr != OPUS_OK) {
+        MessageBoxA(0, "Failed to create Opus encoder.", "AudioSkid", MB_OK | MB_ICONERROR);
+        return 1;
+    }
     opus_encoder_ctl(Encoder, OPUS_SET_BITRATE(96000));
     opus_encoder_ctl(Encoder, OPUS_SET_SIGNAL(OPUS_SIGNAL_MUSIC));
     opus_encoder_ctl(Encoder, OPUS_SET_COMPLEXITY(10));
-    opus_encoder_ctl(Encoder, OPUS_SET_VBR(0));
+
+    CreateThread(NULL, 0, StatsThread, NULL, 0, NULL);
 
     float PrevMono = 0.0f;
     int HavePrev = 0;
