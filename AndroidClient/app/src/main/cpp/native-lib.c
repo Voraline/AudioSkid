@@ -124,7 +124,7 @@ Java_com_skid_audio_AudioService_StartAudioEngine(JNIEnv* Env, jobject Thiz, jst
 
     AAudioStream* Stream;
     AAudioStreamBuilder_openStream(Builder, &Stream);
-    AAudioStream_setBufferSizeInFrames(Stream, AAudioStream_getFramesPerBurst(Stream) * 1);
+    AAudioStream_setBufferSizeInFrames(Stream, AAudioStream_getFramesPerBurst(Stream) * 2);
     AAudioStream_requestStart(Stream);
     ActiveStream = Stream;
 
