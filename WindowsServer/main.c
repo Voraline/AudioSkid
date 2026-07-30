@@ -204,7 +204,7 @@ int main() {
         MessageBoxA(0, "Failed to create Opus encoder.", "AudioSkid", MB_OK | MB_ICONERROR);
         return 1;
     }
-    opus_encoder_ctl(Encoder, OPUS_SET_BITRATE(96000));
+    opus_encoder_ctl(Encoder, OPUS_SET_BITRATE(160000));
     opus_encoder_ctl(Encoder, OPUS_SET_VBR(0));
     opus_encoder_ctl(Encoder, OPUS_SET_SIGNAL(OPUS_SIGNAL_MUSIC));
     opus_encoder_ctl(Encoder, OPUS_SET_COMPLEXITY(10));
