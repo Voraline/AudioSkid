@@ -15,9 +15,9 @@
 #define BufferSize 16384
 #define FrameSamples 960
 #define MaxPacketBytes 1500
-#define JitterStartSamples 3840
-#define JitterHighWaterSamples 9600
-#define JitterTargetSamples 4800
+#define JitterStartSamples 960
+#define JitterHighWaterSamples 4800
+#define JitterTargetSamples 2400
 #define MaxConcealedFrames 25
 
 static int SockFd = -1;
