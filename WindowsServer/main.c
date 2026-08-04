@@ -38,24 +38,8 @@ static short PacketBuffer[FrameSamples];
 static int PacketIndex = 0;
 static unsigned char NetPacket[NetPacketSize];
 static uint16_t SeqNum = 0;
-static volatile LONG64 BytesSent = 0;
 static int Channels;
 static float InvChannels;
-
-DWORD WINAPI StatsThread(LPVOID Param) {
-    ULONGLONG LastTick = GetTickCount64();
-    while (1) {
-        Sleep(1000);
-        ULONGLONG Now = GetTickCount64();
-        ULONGLONG Elapsed = Now - LastTick;
-        LastTick = Now;
-        LONG64 Bytes = InterlockedExchange64(&BytesSent, 0);
-        double Kbps = (double)(Bytes * 8) / 1000.0 / ((double)Elapsed / 1000.0);
-        printf("\rCurrent: %.1f kbps          ", Kbps);
-        fflush(stdout);
-    }
-    return 0;
-}
 
 DWORD WINAPI ListenerThread(LPVOID Param) {
     char Buffer;
@@ -113,8 +97,6 @@ void FlushFrame() {
         for (int I = 0; I < SnapshotCount; I++) {
             sendto(ServerSocket, (char*)NetPacket, TotalBytes, 0, (struct sockaddr*)&ClientsSnapshot[I].Addr, sizeof(ClientsSnapshot[I].Addr));
         }
-
-        InterlockedAdd64(&BytesSent, (LONG64)TotalBytes * SnapshotCount);
     }
     PacketIndex = 0;
 }
@@ -208,8 +190,6 @@ int main() {
     opus_encoder_ctl(Encoder, OPUS_SET_VBR(0));
     opus_encoder_ctl(Encoder, OPUS_SET_SIGNAL(OPUS_SIGNAL_MUSIC));
     opus_encoder_ctl(Encoder, OPUS_SET_COMPLEXITY(10));
-
-    CreateThread(NULL, 0, StatsThread, NULL, 0, NULL);
 
     float PrevMono = 0.0f;
     int HavePrev = 0;
