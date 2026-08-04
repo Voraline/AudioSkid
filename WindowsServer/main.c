@@ -67,7 +67,7 @@ DWORD WINAPI ListenerThread(LPVOID Param) {
     return 0;
 }
 
-float MixToMono(const float* Samples, UINT32 FrameIndex) {
+static inline float MixToMono(const float* Samples, UINT32 FrameIndex) {
     const float* Base = Samples + FrameIndex * Channels;
     if (Channels == 2) {
         return (Base[0] + Base[1]) * 0.5f;
@@ -102,7 +102,7 @@ void FlushFrame() {
     PacketIndex = 0;
 }
 
-void PushSample(float Mono) {
+static inline void PushSample(float Mono) {
     int Val = lrintf(Mono * 32767.0f);
     Val = Val > 32767 ? 32767 : (Val < -32768 ? -32768 : Val);
     PacketBuffer[PacketIndex++] = (short)Val;
