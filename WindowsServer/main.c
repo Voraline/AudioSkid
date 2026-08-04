@@ -8,6 +8,7 @@
 #include <stdint.h>
 #include <string.h>
 #include <stdio.h>
+#include <math.h>
 #include <opus.h>
 
 const CLSID CLSID_MMDeviceEnumerator = { 0xBCDE0395, 0xE52F, 0x467C, { 0x8E, 0x3D, 0xC4, 0x57, 0x92, 0x91, 0x69, 0x2E } };
@@ -102,7 +103,7 @@ void FlushFrame() {
 }
 
 void PushSample(float Mono) {
-    int Val = (int)(Mono * 32767.0f);
+    int Val = lrintf(Mono * 32767.0f);
     Val = Val > 32767 ? 32767 : (Val < -32768 ? -32768 : Val);
     PacketBuffer[PacketIndex++] = (short)Val;
     if (PacketIndex == FrameSamples) {
