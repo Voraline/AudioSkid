@@ -1,204 +1,235 @@
-#include <jni.h>
-#include <sys/socket.h>
-#include <netinet/in.h>
-#include <arpa/inet.h>
-#include <aaudio/AAudio.h>
-#include <unistd.h>
-#include <stdatomic.h>
-#include <sched.h>
-#include <string.h>
+#define WIN32_LEAN_AND_MEAN
+#include <winsock2.h>
+#include <ws2tcpip.h>
+#include <windows.h>
+#include <mmdeviceapi.h>
+#include <audioclient.h>
+#include <avrt.h>
 #include <stdint.h>
-#include <stdbool.h>
+#include <string.h>
+#include <stdio.h>
+#include <math.h>
 #include <opus.h>
 
-#define BufferMask 16383
-#define BufferSize 16384
+const CLSID CLSID_MMDeviceEnumerator = { 0xBCDE0395, 0xE52F, 0x467C, { 0x8E, 0x3D, 0xC4, 0x57, 0x92, 0x91, 0x69, 0x2E } };
+const IID IID_IMMDeviceEnumerator = { 0xA95664D2, 0x9614, 0x4F35, { 0xA7, 0x46, 0xDE, 0x8D, 0xB6, 0x36, 0x17, 0xE6 } };
+const IID IID_IAudioClient = { 0x1CB9AD4C, 0xDBFA, 0x4C32, { 0xB1, 0x78, 0xC2, 0xF5, 0x68, 0xA7, 0x03, 0xB2 } };
+const IID IID_IAudioCaptureClient = { 0xC8ADBD64, 0xE71E, 0x48A0, { 0xA4, 0xDE, 0x18, 0x5C, 0x39, 0x5C, 0xD3, 0x17 } };
+
+#pragma comment(lib, "ws2_32.lib")
+#pragma comment(lib, "ole32.lib")
+#pragma comment(lib, "avrt.lib")
+
 #define FrameSamples 960
-#define MaxPacketBytes 1500
-#define JitterStartSamples 960
-#define JitterHighWaterSamples 4800
-#define JitterTargetSamples 2400
-#define MaxConcealedFrames 25
+#define MaxClients 64
+#define NetPacketSize 1502
 
-static int SockFd = -1;
-static short RingBuffer[BufferSize];
-static atomic_int Head = 0;
-static atomic_int Tail = 0;
-static atomic_bool CanPlay = false;
-static atomic_bool EngineStarted = false;
-static atomic_bool EngineRunning = false;
-static AAudioStream* ActiveStream = NULL;
+typedef struct {
+    struct sockaddr_in Addr;
+} Client;
 
-aaudio_data_callback_result_t AudioCallback(AAudioStream* Stream, void* UserData, void* AudioData, int32_t NumFrames) {
-    if (!atomic_load_explicit(&CanPlay, memory_order_acquire)) {
-        memset(AudioData, 0, NumFrames * 2);
-        return AAUDIO_CALLBACK_RESULT_CONTINUE;
+static SOCKET ServerSocket;
+static Client Clients[MaxClients];
+static int ClientCount = 0;
+static CRITICAL_SECTION ClientMutex;
+static Client ClientsSnapshot[MaxClients];
+
+static OpusEncoder* Encoder;
+static short PacketBuffer[FrameSamples];
+static int PacketIndex = 0;
+static unsigned char NetPacket[NetPacketSize];
+static uint16_t SeqNum = 0;
+static int Channels;
+static float InvChannels;
+
+DWORD WINAPI ListenerThread(LPVOID Param) {
+    char Buffer;
+    struct sockaddr_in TempAddr;
+    int Len = sizeof(TempAddr);
+    while (1) {
+        if (recvfrom(ServerSocket, &Buffer, 1, 0, (struct sockaddr*)&TempAddr, &Len) > 0) {
+            EnterCriticalSection(&ClientMutex);
+            int Found = 0;
+            for (int I = 0; I < ClientCount; I++) {
+                if (Clients[I].Addr.sin_addr.s_addr == TempAddr.sin_addr.s_addr &&
+                    Clients[I].Addr.sin_port == TempAddr.sin_port) {
+                    Found = 1;
+                    break;
+                }
+            }
+            if (!Found && ClientCount < MaxClients) {
+                Clients[ClientCount].Addr = TempAddr;
+                ClientCount++;
+            }
+            LeaveCriticalSection(&ClientMutex);
+        }
     }
-
-    short* Output = (short*)AudioData;
-    int CurrentHead = atomic_load_explicit(&Head, memory_order_acquire);
-    int CurrentTail = atomic_load_explicit(&Tail, memory_order_relaxed);
-
-    int Available = (CurrentHead - CurrentTail) & BufferMask;
-
-    if (Available < NumFrames) {
-        atomic_store_explicit(&CanPlay, false, memory_order_release);
-        memset(AudioData, 0, NumFrames * 2);
-        return AAUDIO_CALLBACK_RESULT_CONTINUE;
-    }
-
-    int Part1 = (CurrentTail + NumFrames) & BufferMask;
-    if (Part1 >= CurrentTail) {
-        memcpy(Output, &RingBuffer[CurrentTail], NumFrames * 2);
-    } else {
-        int Split = BufferSize - CurrentTail;
-        memcpy(Output, &RingBuffer[CurrentTail], Split * 2);
-        memcpy(Output + Split, &RingBuffer[0], (NumFrames - Split) * 2);
-    }
-
-    atomic_store_explicit(&Tail, Part1, memory_order_release);
-    return AAUDIO_CALLBACK_RESULT_CONTINUE;
+    return 0;
 }
 
-void PushFrame(const short* PcmFrame) {
-    int CurrentHead = atomic_load_explicit(&Head, memory_order_relaxed);
-    int CurrentTail = atomic_load_explicit(&Tail, memory_order_acquire);
-
-    int Available = (CurrentHead - CurrentTail) & BufferMask;
-    if (Available > JitterHighWaterSamples) {
-        atomic_store_explicit(&Tail, (CurrentHead - JitterTargetSamples) & BufferMask, memory_order_release);
+static inline float MixToMono(const float* Samples, UINT32 FrameIndex) {
+    const float* Base = Samples + FrameIndex * Channels;
+    if (Channels == 2) {
+        return (Base[0] + Base[1]) * 0.5f;
     }
-
-    if (!atomic_load_explicit(&CanPlay, memory_order_relaxed) && Available >= JitterStartSamples) {
-        atomic_store_explicit(&CanPlay, true, memory_order_release);
+    if (Channels == 1) {
+        return Base[0];
     }
-
-    int NextHead = (CurrentHead + FrameSamples) & BufferMask;
-    if (NextHead >= CurrentHead) {
-        memcpy(&RingBuffer[CurrentHead], PcmFrame, FrameSamples * 2);
-    } else {
-        int Split = BufferSize - CurrentHead;
-        memcpy(&RingBuffer[CurrentHead], PcmFrame, Split * 2);
-        memcpy(&RingBuffer[0], PcmFrame + Split, (FrameSamples - Split) * 2);
+    float Sum = 0;
+    for (int K = 0; K < Channels; K++) {
+        Sum += Base[K];
     }
-
-    atomic_store_explicit(&Head, NextHead, memory_order_release);
+    return Sum * InvChannels;
 }
 
-JNIEXPORT void JNICALL
-Java_com_skid_audio_AudioService_StartAudioEngine(JNIEnv* Env, jobject Thiz, jstring IpStr) {
-    bool Expected = false;
-    if (!atomic_compare_exchange_strong_explicit(&EngineStarted, &Expected, true, memory_order_acq_rel, memory_order_acquire)) {
-        return;
+void FlushFrame() {
+    int EncodedBytes = opus_encode(Encoder, PacketBuffer, FrameSamples, NetPacket + 2, sizeof(NetPacket) - 2);
+    if (EncodedBytes > 0) {
+        uint16_t NetSeq = htons(SeqNum++);
+        memcpy(NetPacket, &NetSeq, 2);
+        int TotalBytes = EncodedBytes + 2;
+
+        int SnapshotCount;
+        EnterCriticalSection(&ClientMutex);
+        SnapshotCount = ClientCount;
+        memcpy(ClientsSnapshot, Clients, sizeof(Client) * ClientCount);
+        LeaveCriticalSection(&ClientMutex);
+
+        for (int I = 0; I < SnapshotCount; I++) {
+            sendto(ServerSocket, (char*)NetPacket, TotalBytes, 0, (struct sockaddr*)&ClientsSnapshot[I].Addr, sizeof(ClientsSnapshot[I].Addr));
+        }
     }
-    atomic_store_explicit(&EngineRunning, true, memory_order_release);
+    PacketIndex = 0;
+}
 
-    const char* Ip = (*Env)->GetStringUTFChars(Env, IpStr, NULL);
+static inline void PushSample(float Mono) {
+    int Val = lrintf(Mono * 32767.0f);
+    Val = Val > 32767 ? 32767 : (Val < -32768 ? -32768 : Val);
+    PacketBuffer[PacketIndex++] = (short)Val;
+    if (PacketIndex == FrameSamples) {
+        FlushFrame();
+    }
+}
 
-    SockFd = socket(AF_INET, SOCK_DGRAM, 0);
+int main() {
+    SetPriorityClass(GetCurrentProcess(), REALTIME_PRIORITY_CLASS);
+    WSADATA Wsa;
+    WSAStartup(MAKEWORD(2, 2), &Wsa);
+    InitializeCriticalSection(&ClientMutex);
+
+    ServerSocket = socket(AF_INET, SOCK_DGRAM, 0);
     int BufSize = 4194304;
     int Tos = 0x10;
-    setsockopt(SockFd, SOL_SOCKET, SO_RCVBUF, (char*)&BufSize, 4);
-    setsockopt(SockFd, IPPROTO_IP, IP_TOS, (char*)&Tos, 4);
+    if (setsockopt(ServerSocket, SOL_SOCKET, SO_SNDBUF, (char*)&BufSize, 4) != 0) {
+        MessageBoxA(0, "Failed to set socket send buffer size.", "AudioSkid", MB_OK | MB_ICONWARNING);
+    }
+    setsockopt(ServerSocket, IPPROTO_IP, IP_TOS, (char*)&Tos, 4);
 
     struct sockaddr_in Addr;
+    memset(&Addr, 0, sizeof(Addr));
     Addr.sin_family = AF_INET;
     Addr.sin_port = htons(11000);
-    inet_pton(AF_INET, Ip, &Addr.sin_addr);
+    bind(ServerSocket, (struct sockaddr*)&Addr, sizeof(Addr));
 
-    char Ping = 1;
-    sendto(SockFd, &Ping, 1, 0, (struct sockaddr*)&Addr, sizeof(Addr));
+    CreateThread(NULL, 0, ListenerThread, NULL, 0, NULL);
 
-    struct sched_param Param;
-    Param.sched_priority = sched_get_priority_max(SCHED_RR);
-    sched_setscheduler(0, SCHED_RR, &Param);
+    CoInitialize(0);
+    IMMDeviceEnumerator* Enumerator;
+    CoCreateInstance(&CLSID_MMDeviceEnumerator, 0, CLSCTX_ALL, &IID_IMMDeviceEnumerator, (void**)&Enumerator);
 
-    AAudioStreamBuilder* Builder;
-    AAudio_createStreamBuilder(&Builder);
-    AAudioStreamBuilder_setFormat(Builder, AAUDIO_FORMAT_PCM_I16);
-    AAudioStreamBuilder_setChannelCount(Builder, 1);
-    AAudioStreamBuilder_setSampleRate(Builder, 48000);
-    AAudioStreamBuilder_setPerformanceMode(Builder, AAUDIO_PERFORMANCE_MODE_LOW_LATENCY);
-    AAudioStreamBuilder_setSharingMode(Builder, AAUDIO_SHARING_MODE_EXCLUSIVE);
-    AAudioStreamBuilder_setDataCallback(Builder, AudioCallback, NULL);
+    IMMDevice* Device;
+    Enumerator->lpVtbl->GetDefaultAudioEndpoint(Enumerator, eRender, eConsole, &Device);
 
-    AAudioStream* Stream;
-    AAudioStreamBuilder_openStream(Builder, &Stream);
-    AAudioStream_setBufferSizeInFrames(Stream, AAudioStream_getFramesPerBurst(Stream) * 2);
-    AAudioStream_requestStart(Stream);
-    ActiveStream = Stream;
+    IAudioClient* AudioClient;
+    Device->lpVtbl->Activate(Device, &IID_IAudioClient, CLSCTX_ALL, 0, (void**)&AudioClient);
 
-    AAudioStreamBuilder_delete(Builder);
-    (*Env)->ReleaseStringUTFChars(Env, IpStr, Ip);
+    WAVEFORMATEX* Format;
+    AudioClient->lpVtbl->GetMixFormat(AudioClient, &Format);
+
+    REFERENCE_TIME DefaultPeriod, MinPeriod;
+    AudioClient->lpVtbl->GetDevicePeriod(AudioClient, &DefaultPeriod, &MinPeriod);
+
+    AudioClient->lpVtbl->Initialize(AudioClient, AUDCLNT_SHAREMODE_SHARED, AUDCLNT_STREAMFLAGS_LOOPBACK | AUDCLNT_STREAMFLAGS_EVENTCALLBACK, MinPeriod, 0, Format, 0);
+
+    HANDLE AudioEvent = CreateEvent(0, 0, 0, 0);
+    AudioClient->lpVtbl->SetEventHandle(AudioClient, AudioEvent);
+
+    IAudioCaptureClient* CaptureClient;
+    AudioClient->lpVtbl->GetService(AudioClient, &IID_IAudioCaptureClient, (void**)&CaptureClient);
+    AudioClient->lpVtbl->Start(AudioClient);
+
+    DWORD TaskIndex = 0;
+    HANDLE TaskHandle = AvSetMmThreadCharacteristicsA("Pro Audio", &TaskIndex);
+    AvSetMmThreadPriority(TaskHandle, AVRT_PRIORITY_CRITICAL);
+
+    UINT32 PacketLen;
+    BYTE* Data;
+    UINT32 NumFrames;
+    DWORD Flags;
+    Channels = Format->nChannels;
+    InvChannels = 1.0f / (float)Channels;
+
+    UINT32 DeviceRate = Format->nSamplesPerSec;
+    int NeedsResample = (DeviceRate != 48000);
+    float ResampleRatio = (float)DeviceRate / 48000.0f;
+    float ResamplePos = 0.0f;
+
+    if (NeedsResample && DeviceRate != 44100) {
+        char Msg[256];
+        sprintf_s(Msg, sizeof(Msg), "Default audio device is running at %u Hz, which isn't supported. Use a 44.1kHz or 48kHz output device.", DeviceRate);
+        MessageBoxA(0, Msg, "AudioSkid", MB_OK | MB_ICONERROR);
+        return 1;
+    }
 
     int OpusErr = 0;
-    OpusDecoder* Decoder = opus_decoder_create(48000, 1, &OpusErr);
+    Encoder = opus_encoder_create(48000, 1, OPUS_APPLICATION_RESTRICTED_LOWDELAY, &OpusErr);
+    if (!Encoder || OpusErr != OPUS_OK) {
+        MessageBoxA(0, "Failed to create Opus encoder.", "AudioSkid", MB_OK | MB_ICONERROR);
+        return 1;
+    }
+    opus_encoder_ctl(Encoder, OPUS_SET_BITRATE(160000));
+    opus_encoder_ctl(Encoder, OPUS_SET_VBR(0));
+    opus_encoder_ctl(Encoder, OPUS_SET_SIGNAL(OPUS_SIGNAL_MUSIC));
+    opus_encoder_ctl(Encoder, OPUS_SET_COMPLEXITY(10));
 
-    unsigned char NetBuf[MaxPacketBytes];
-    short PcmFrame[FrameSamples];
+    float PrevMono = 0.0f;
+    int HavePrev = 0;
 
-    bool HaveExpectedSeq = false;
-    uint16_t ExpectedSeq = 0;
+    while (1) {
+        WaitForSingleObject(AudioEvent, INFINITE);
+        while (1) {
+            if (FAILED(CaptureClient->lpVtbl->GetNextPacketSize(CaptureClient, &PacketLen)) || PacketLen == 0) break;
 
-    while (atomic_load_explicit(&EngineRunning, memory_order_acquire)) {
-        int Received = recv(SockFd, (char*)NetBuf, MaxPacketBytes, 0);
-        if (!atomic_load_explicit(&EngineRunning, memory_order_acquire)) break;
-        if (Received <= 2) continue;
+            if (SUCCEEDED(CaptureClient->lpVtbl->GetBuffer(CaptureClient, &Data, &NumFrames, &Flags, 0, 0))) {
+                if (NumFrames) {
+                    const float* Samples = (const float*)Data;
 
-        uint16_t NetSeq;
-        memcpy(&NetSeq, NetBuf, 2);
-        uint16_t Seq = ntohs(NetSeq);
-        const unsigned char* OpusData = NetBuf + 2;
-        int OpusLen = Received - 2;
+                    if (!NeedsResample) {
+                        for (UINT32 I = 0; I < NumFrames; I++) {
+                            PushSample(MixToMono(Samples, I));
+                        }
+                    } else {
+                        for (UINT32 I = 0; I < NumFrames; I++) {
+                            float CurMono = MixToMono(Samples, I);
+                            if (!HavePrev) {
+                                PrevMono = CurMono;
+                                HavePrev = 1;
+                                continue;
+                            }
 
-        int MissingFrames = 0;
-        if (HaveExpectedSeq) {
-            MissingFrames = (uint16_t)(Seq - ExpectedSeq);
-            if (MissingFrames > MaxConcealedFrames) {
-                MissingFrames = 0;
+                            while (ResamplePos < 1.0f) {
+                                float Interpolated = PrevMono + (CurMono - PrevMono) * ResamplePos;
+                                PushSample(Interpolated);
+                                ResamplePos += ResampleRatio;
+                            }
+                            ResamplePos -= 1.0f;
+                            PrevMono = CurMono;
+                        }
+                    }
+                }
+                CaptureClient->lpVtbl->ReleaseBuffer(CaptureClient, NumFrames);
             }
         }
-        HaveExpectedSeq = true;
-        ExpectedSeq = Seq + 1;
-
-        for (int M = 0; M < MissingFrames; M++) {
-            int Decoded;
-            if (M == MissingFrames - 1) {
-                Decoded = opus_decode(Decoder, OpusData, OpusLen, PcmFrame, FrameSamples, 1);
-            } else {
-                Decoded = opus_decode(Decoder, NULL, 0, PcmFrame, FrameSamples, 0);
-            }
-            if (Decoded == FrameSamples) {
-                PushFrame(PcmFrame);
-            }
-        }
-
-        int Decoded = opus_decode(Decoder, OpusData, OpusLen, PcmFrame, FrameSamples, 0);
-        if (Decoded == FrameSamples) {
-            PushFrame(PcmFrame);
-        }
     }
-
-    if (ActiveStream != NULL) {
-        AAudioStream_requestStop(ActiveStream);
-        AAudioStream_close(ActiveStream);
-        ActiveStream = NULL;
-    }
-    opus_decoder_destroy(Decoder);
-    if (SockFd >= 0) {
-        close(SockFd);
-        SockFd = -1;
-    }
-    atomic_store_explicit(&CanPlay, false, memory_order_release);
-    atomic_store_explicit(&Head, 0, memory_order_release);
-    atomic_store_explicit(&Tail, 0, memory_order_release);
-    atomic_store_explicit(&EngineStarted, false, memory_order_release);
-}
-
-JNIEXPORT void JNICALL
-Java_com_skid_audio_AudioService_StopAudioEngine(JNIEnv* Env, jobject Thiz) {
-    atomic_store_explicit(&EngineRunning, false, memory_order_release);
-    if (SockFd >= 0) {
-        shutdown(SockFd, SHUT_RDWR);
-    }
+    return 0;
 }
