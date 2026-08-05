@@ -8,7 +8,7 @@
 #include <stdint.h>
 #include <string.h>
 #include <stdio.h>
-#include <stdatomic.h>
+#include <intrin.h>
 #include <opus.h>
 
 const CLSID CLSID_MMDeviceEnumerator = { 0xBCDE0395, 0xE52F, 0x467C, { 0x8E, 0x3D, 0xC4, 0x57, 0x92, 0x91, 0x69, 0x2E } };
@@ -43,13 +43,17 @@ static int Channels;
 static float InvChannels;
 
 static short RingBuffer[RingBufferSize];
-static atomic_int RingHead = 0;
-static atomic_int RingTail = 0;
+static volatile LONG RingHead = 0;
+static volatile LONG RingTail = 0;
 static HANDLE FrameReadyEvent;
-static atomic_bool EncoderRunning = true;
+static volatile LONG EncoderRunning = 1;
 
 static inline int RoundToInt16(float Value) {
     return (int)(Value >= 0.0f ? Value + 0.5f : Value - 0.5f);
+}
+
+static inline int RingRunning(volatile LONG* Flag) {
+    return InterlockedCompareExchange(Flag, 0, 0) != 0;
 }
 
 DWORD WINAPI ListenerThread(LPVOID Param) {
@@ -96,9 +100,9 @@ static inline void PushRingSample(float Mono) {
     int Val = RoundToInt16(Mono * 32767.0f);
     Val = Val > 32767 ? 32767 : (Val < -32768 ? -32768 : Val);
 
-    int Head = atomic_load_explicit(&RingHead, memory_order_relaxed);
+    LONG Head = RingHead;
     RingBuffer[Head] = (short)Val;
-    atomic_store_explicit(&RingHead, (Head + 1) & RingBufferMask, memory_order_release);
+    InterlockedExchange(&RingHead, (Head + 1) & RingBufferMask);
 
     SetEvent(FrameReadyEvent);
 }
@@ -131,26 +135,26 @@ DWORD WINAPI EncoderThread(LPVOID Param) {
 
     short PcmFrame[FrameSamples];
 
-    while (atomic_load_explicit(&EncoderRunning, memory_order_acquire)) {
+    while (RingRunning(&EncoderRunning)) {
         WaitForSingleObject(FrameReadyEvent, INFINITE);
 
         while (1) {
-            int Tail = atomic_load_explicit(&RingTail, memory_order_relaxed);
-            int Head = atomic_load_explicit(&RingHead, memory_order_acquire);
-            int Available = (Head - Tail) & RingBufferMask;
+            LONG Tail = RingTail;
+            LONG Head = RingHead;
+            LONG Available = (Head - Tail) & RingBufferMask;
             if (Available < FrameSamples) {
                 break;
             }
 
-            int NextTail = (Tail + FrameSamples) & RingBufferMask;
+            LONG NextTail = (Tail + FrameSamples) & RingBufferMask;
             if (NextTail >= Tail) {
                 memcpy(PcmFrame, &RingBuffer[Tail], FrameSamples * sizeof(short));
             } else {
-                int Split = RingBufferSize - Tail;
+                LONG Split = RingBufferSize - Tail;
                 memcpy(PcmFrame, &RingBuffer[Tail], Split * sizeof(short));
                 memcpy(PcmFrame + Split, &RingBuffer[0], (FrameSamples - Split) * sizeof(short));
             }
-            atomic_store_explicit(&RingTail, NextTail, memory_order_release);
+            InterlockedExchange(&RingTail, NextTail);
 
             SendEncodedFrame(PcmFrame);
         }
