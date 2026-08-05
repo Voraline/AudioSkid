@@ -8,7 +8,7 @@
 #include <stdint.h>
 #include <string.h>
 #include <stdio.h>
-#include <math.h>
+#include <stdatomic.h>
 #include <opus.h>
 
 const CLSID CLSID_MMDeviceEnumerator = { 0xBCDE0395, 0xE52F, 0x467C, { 0x8E, 0x3D, 0xC4, 0x57, 0x92, 0x91, 0x69, 0x2E } };
@@ -23,6 +23,8 @@ const IID IID_IAudioCaptureClient = { 0xC8ADBD64, 0xE71E, 0x48A0, { 0xA4, 0xDE, 
 #define FrameSamples 960
 #define MaxClients 64
 #define NetPacketSize 1502
+#define RingBufferSize 16384
+#define RingBufferMask (RingBufferSize - 1)
 
 typedef struct {
     struct sockaddr_in Addr;
@@ -35,12 +37,20 @@ static CRITICAL_SECTION ClientMutex;
 static Client ClientsSnapshot[MaxClients];
 
 static OpusEncoder* Encoder;
-static short PacketBuffer[FrameSamples];
-static int PacketIndex = 0;
 static unsigned char NetPacket[NetPacketSize];
 static uint16_t SeqNum = 0;
 static int Channels;
 static float InvChannels;
+
+static short RingBuffer[RingBufferSize];
+static atomic_int RingHead = 0;
+static atomic_int RingTail = 0;
+static HANDLE FrameReadyEvent;
+static atomic_bool EncoderRunning = true;
+
+static inline int RoundToInt16(float Value) {
+    return (int)(Value >= 0.0f ? Value + 0.5f : Value - 0.5f);
+}
 
 DWORD WINAPI ListenerThread(LPVOID Param) {
     char Buffer;
@@ -82,37 +92,74 @@ static inline float MixToMono(const float* Samples, UINT32 FrameIndex) {
     return Sum * InvChannels;
 }
 
-void FlushFrame() {
-    int EncodedBytes = opus_encode(Encoder, PacketBuffer, FrameSamples, NetPacket + 2, sizeof(NetPacket) - 2);
-    if (EncodedBytes > 0) {
-        uint16_t NetSeq = htons(SeqNum++);
-        memcpy(NetPacket, &NetSeq, 2);
-        int TotalBytes = EncodedBytes + 2;
+static inline void PushRingSample(float Mono) {
+    int Val = RoundToInt16(Mono * 32767.0f);
+    Val = Val > 32767 ? 32767 : (Val < -32768 ? -32768 : Val);
 
-        int SnapshotCount;
-        EnterCriticalSection(&ClientMutex);
-        SnapshotCount = ClientCount;
-        memcpy(ClientsSnapshot, Clients, sizeof(Client) * ClientCount);
-        LeaveCriticalSection(&ClientMutex);
+    int Head = atomic_load_explicit(&RingHead, memory_order_relaxed);
+    RingBuffer[Head] = (short)Val;
+    atomic_store_explicit(&RingHead, (Head + 1) & RingBufferMask, memory_order_release);
 
-        for (int I = 0; I < SnapshotCount; I++) {
-            sendto(ServerSocket, (char*)NetPacket, TotalBytes, 0, (struct sockaddr*)&ClientsSnapshot[I].Addr, sizeof(ClientsSnapshot[I].Addr));
-        }
-    }
-    PacketIndex = 0;
+    SetEvent(FrameReadyEvent);
 }
 
-static inline void PushSample(float Mono) {
-    int Val = lrintf(Mono * 32767.0f);
-    Val = Val > 32767 ? 32767 : (Val < -32768 ? -32768 : Val);
-    PacketBuffer[PacketIndex++] = (short)Val;
-    if (PacketIndex == FrameSamples) {
-        FlushFrame();
+static void SendEncodedFrame(const short* PcmFrame) {
+    int EncodedBytes = opus_encode(Encoder, PcmFrame, FrameSamples, NetPacket + 2, sizeof(NetPacket) - 2);
+    if (EncodedBytes <= 0) {
+        return;
     }
+
+    uint16_t NetSeq = htons(SeqNum++);
+    memcpy(NetPacket, &NetSeq, 2);
+    int TotalBytes = EncodedBytes + 2;
+
+    int SnapshotCount;
+    EnterCriticalSection(&ClientMutex);
+    SnapshotCount = ClientCount;
+    memcpy(ClientsSnapshot, Clients, sizeof(Client) * ClientCount);
+    LeaveCriticalSection(&ClientMutex);
+
+    for (int I = 0; I < SnapshotCount; I++) {
+        sendto(ServerSocket, (char*)NetPacket, TotalBytes, 0, (struct sockaddr*)&ClientsSnapshot[I].Addr, sizeof(ClientsSnapshot[I].Addr));
+    }
+}
+
+DWORD WINAPI EncoderThread(LPVOID Param) {
+    DWORD TaskIndex = 0;
+    HANDLE TaskHandle = AvSetMmThreadCharacteristicsA("Pro Audio", &TaskIndex);
+    AvSetMmThreadPriority(TaskHandle, AVRT_PRIORITY_CRITICAL);
+
+    short PcmFrame[FrameSamples];
+
+    while (atomic_load_explicit(&EncoderRunning, memory_order_acquire)) {
+        WaitForSingleObject(FrameReadyEvent, INFINITE);
+
+        while (1) {
+            int Tail = atomic_load_explicit(&RingTail, memory_order_relaxed);
+            int Head = atomic_load_explicit(&RingHead, memory_order_acquire);
+            int Available = (Head - Tail) & RingBufferMask;
+            if (Available < FrameSamples) {
+                break;
+            }
+
+            int NextTail = (Tail + FrameSamples) & RingBufferMask;
+            if (NextTail >= Tail) {
+                memcpy(PcmFrame, &RingBuffer[Tail], FrameSamples * sizeof(short));
+            } else {
+                int Split = RingBufferSize - Tail;
+                memcpy(PcmFrame, &RingBuffer[Tail], Split * sizeof(short));
+                memcpy(PcmFrame + Split, &RingBuffer[0], (FrameSamples - Split) * sizeof(short));
+            }
+            atomic_store_explicit(&RingTail, NextTail, memory_order_release);
+
+            SendEncodedFrame(PcmFrame);
+        }
+    }
+    return 0;
 }
 
 int main() {
-    SetPriorityClass(GetCurrentProcess(), REALTIME_PRIORITY_CLASS);
+    SetPriorityClass(GetCurrentProcess(), HIGH_PRIORITY_CLASS);
     WSADATA Wsa;
     WSAStartup(MAKEWORD(2, 2), &Wsa);
     InitializeCriticalSection(&ClientMutex);
@@ -158,10 +205,6 @@ int main() {
     AudioClient->lpVtbl->GetService(AudioClient, &IID_IAudioCaptureClient, (void**)&CaptureClient);
     AudioClient->lpVtbl->Start(AudioClient);
 
-    DWORD TaskIndex = 0;
-    HANDLE TaskHandle = AvSetMmThreadCharacteristicsA("Pro Audio", &TaskIndex);
-    AvSetMmThreadPriority(TaskHandle, AVRT_PRIORITY_CRITICAL);
-
     UINT32 PacketLen;
     BYTE* Data;
     UINT32 NumFrames;
@@ -192,6 +235,9 @@ int main() {
     opus_encoder_ctl(Encoder, OPUS_SET_SIGNAL(OPUS_SIGNAL_MUSIC));
     opus_encoder_ctl(Encoder, OPUS_SET_COMPLEXITY(10));
 
+    FrameReadyEvent = CreateEvent(0, 0, 0, 0);
+    CreateThread(NULL, 0, EncoderThread, NULL, 0, NULL);
+
     float PrevMono = 0.0f;
     int HavePrev = 0;
 
@@ -206,7 +252,7 @@ int main() {
 
                     if (!NeedsResample) {
                         for (UINT32 I = 0; I < NumFrames; I++) {
-                            PushSample(MixToMono(Samples, I));
+                            PushRingSample(MixToMono(Samples, I));
                         }
                     } else {
                         for (UINT32 I = 0; I < NumFrames; I++) {
@@ -219,7 +265,7 @@ int main() {
 
                             while (ResamplePos < 1.0f) {
                                 float Interpolated = PrevMono + (CurMono - PrevMono) * ResamplePos;
-                                PushSample(Interpolated);
+                                PushRingSample(Interpolated);
                                 ResamplePos += ResampleRatio;
                             }
                             ResamplePos -= 1.0f;
