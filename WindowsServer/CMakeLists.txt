@@ -5,6 +5,8 @@ if(NOT MSVC)
     message(FATAL_ERROR "This project only supports MSVC.")
 endif()
 
+set(CMAKE_C_STANDARD 17)
+set(CMAKE_C_STANDARD_REQUIRED ON)
 set(CMAKE_C_FLAGS_RELEASE "/O2 /arch:AVX2 /fp:precise")
 
 include(FetchContent)
